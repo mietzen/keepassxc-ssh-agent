@@ -207,8 +207,8 @@ def _cmd_setup(config: Config, config_path):
             agent_bin = _find_agent_bin()
             _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
             print()
-            print("  The agent will set SSH_AUTH_SOCK automatically on startup")
-            print("  via 'launchctl setenv' so all new processes use the proxy.")
+            print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
+            print("  so all SSH clients use the proxy transparently.")
         else:
             print()
             print("  To start manually: keepassxc-ssh-agent run")
@@ -273,13 +273,22 @@ def _cmd_status(config: Config):
         print("NOT AVAILABLE (is KeePassXC running with browser integration?)")
 
 
-def _resolve_system_agent(config: Config, config_path) -> str:
-    """Resolve the real system ssh-agent socket path, avoiding our own socket.
+SYSTEM_SOCKET_SUFFIX = ".system"
 
-    On first boot, SSH_AUTH_SOCK points to the real agent (e.g.
-    /tmp/com.apple.launchd.XXX/Listeners). We save this path to config.
-    On restart (KeepAlive), SSH_AUTH_SOCK may point to our own socket
-    (if launchctl setenv was used), so we fall back to the saved path.
+
+def _intercept_ssh_auth_sock(config: Config, config_path) -> str:
+    """Intercept SSH_AUTH_SOCK by replacing the system socket with a symlink.
+
+    Renames the real ssh-agent socket to <path>.system and creates a symlink
+    from the original path to our proxy socket. All SSH clients then connect
+    to our proxy transparently.
+
+    Handles three cases:
+    - Normal startup: rename real socket, symlink ours, forward to renamed
+    - KeepAlive restart: symlink already in place, backup exists, just forward
+    - Crash recovery: backup exists but symlink is stale/missing, re-create
+
+    Returns the path to forward requests to (the renamed real agent socket).
     """
     import os
     from pathlib import Path
@@ -287,50 +296,85 @@ def _resolve_system_agent(config: Config, config_path) -> str:
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
     our_socket = str(Path(config.socket_path).resolve())
 
-    if ssh_auth_sock:
-        resolved = str(Path(ssh_auth_sock).resolve())
-        if resolved != our_socket:
-            # SSH_AUTH_SOCK points to the real agent - save it
-            if config.system_agent_path != ssh_auth_sock:
-                config.system_agent_path = ssh_auth_sock
-                config.save(config_path)
-            return ssh_auth_sock
+    if not ssh_auth_sock:
+        # No SSH_AUTH_SOCK - use saved path if available
+        if config.system_agent_path:
+            backup = config.system_agent_path + SYSTEM_SOCKET_SUFFIX
+            if Path(backup).exists():
+                return backup
+            return config.system_agent_path
+        return ""
 
-    # SSH_AUTH_SOCK points to our socket or is unset - use saved path
+    sock_path = Path(ssh_auth_sock)
+    backup_path = Path(ssh_auth_sock + SYSTEM_SOCKET_SUFFIX)
+
+    # Case 1: Our symlink is already in place (KeepAlive restart)
+    if sock_path.is_symlink():
+        link_target = str(Path(os.readlink(str(sock_path))).resolve())
+        if link_target == our_socket and backup_path.exists():
+            return str(backup_path)
+        # Stale or foreign symlink - remove it
+        sock_path.unlink()
+
+    # Case 2: Backup exists but symlink is gone (crash recovery)
+    if backup_path.exists() and not sock_path.exists():
+        os.symlink(our_socket, str(sock_path))
+        return str(backup_path)
+
+    # Case 3: Normal startup - real socket exists
+    if sock_path.exists() and not sock_path.is_symlink():
+        # Save the original SSH_AUTH_SOCK path
+        if config.system_agent_path != ssh_auth_sock:
+            config.system_agent_path = ssh_auth_sock
+            config.save(config_path)
+
+        # Clean up any stale backup
+        if backup_path.exists():
+            backup_path.unlink()
+
+        os.rename(str(sock_path), str(backup_path))
+        os.symlink(our_socket, str(sock_path))
+        return str(backup_path)
+
+    # Fallback to saved path
     if config.system_agent_path:
+        backup = config.system_agent_path + SYSTEM_SOCKET_SUFFIX
+        if Path(backup).exists():
+            return backup
         return config.system_agent_path
 
     return ""
 
 
-def _setenv_ssh_auth_sock(socket_path: str) -> bool:
-    """Set SSH_AUTH_SOCK for all new launchd-spawned processes.
+def _restore_ssh_auth_sock(ssh_auth_sock: str) -> None:
+    """Restore the original ssh-agent socket on shutdown."""
+    from pathlib import Path
 
-    Uses 'launchctl setenv' which only affects processes spawned by launchd
-    AFTER this call. Already-running terminals/apps are not affected.
-    """
-    import logging
-    import subprocess
+    if not ssh_auth_sock:
+        return
 
-    logger = logging.getLogger(__name__)
-    try:
-        subprocess.run(
-            ["launchctl", "setenv", "SSH_AUTH_SOCK", socket_path],
-            check=True,
-            capture_output=True,
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.warning("launchctl setenv failed: %s", e.stderr.decode().strip() if e.stderr else str(e))
-        return False
-    except FileNotFoundError:
-        logger.debug("launchctl not found (not macOS?)")
-        return False
+    sock_path = Path(ssh_auth_sock)
+    backup_path = Path(ssh_auth_sock + SYSTEM_SOCKET_SUFFIX)
+
+    # Remove our symlink
+    if sock_path.is_symlink():
+        try:
+            sock_path.unlink()
+        except OSError:
+            pass
+
+    # Restore the real socket to its original path
+    if backup_path.exists():
+        try:
+            backup_path.rename(sock_path)
+        except OSError:
+            pass
 
 
 def _cmd_run(config: Config, config_path=None):
     """Start the agent proxy."""
     import logging
+    import os
 
     from .server import SSHAgentProxy
 
@@ -339,20 +383,20 @@ def _cmd_run(config: Config, config_path=None):
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
 
-    system_agent = _resolve_system_agent(config, config_path)
+    ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
+
+    if not config.associations:
+        print("ERROR: No KeePassXC association found. Run 'keepassxc-ssh-agent setup' first.")
+        sys.exit(1)
+
+    system_agent = _intercept_ssh_auth_sock(config, config_path)
     if not system_agent:
         print("ERROR: Cannot determine system ssh-agent path.")
         print("SSH_AUTH_SOCK is not set and no saved agent path in config.")
         print("Start ssh-agent first, e.g.: eval $(ssh-agent)")
         sys.exit(1)
 
-    if not config.associations:
-        print("ERROR: No KeePassXC association found. Run 'keepassxc-ssh-agent setup' first.")
-        sys.exit(1)
-
-    # Redirect SSH_AUTH_SOCK for all new processes to our proxy socket
-    _setenv_ssh_auth_sock(config.socket_path)
-    logger.info("Set SSH_AUTH_SOCK=%s via launchctl setenv", config.socket_path)
+    logger.info("Intercepted SSH_AUTH_SOCK=%s, forwarding to %s", ssh_auth_sock, system_agent)
 
     proxy = SSHAgentProxy(config, system_agent_path=system_agent)
     try:
@@ -362,6 +406,8 @@ def _cmd_run(config: Config, config_path=None):
     except RuntimeError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
+    finally:
+        _restore_ssh_auth_sock(ssh_auth_sock)
 
 
 if __name__ == "__main__":

@@ -127,11 +127,11 @@ Or start manually:
 keepassxc-ssh-agent run
 ```
 
-#### 2. SSH_AUTH_SOCK Redirection
+#### 2. SSH_AUTH_SOCK Interception
 
-The proxy automatically runs `launchctl setenv SSH_AUTH_SOCK ~/.keepassxc/agent.sock` on startup. This redirects all new processes to use the proxy socket. The proxy saves and forwards to the original system ssh-agent path, so there is no loop.
+The proxy automatically intercepts `SSH_AUTH_SOCK` on startup by renaming the system ssh-agent socket (e.g. `/tmp/com.apple.launchd.XXX/Listeners`) to a `.system` backup and placing a symlink from the original path to the proxy socket. All SSH clients then connect to the proxy transparently. The proxy forwards requests to the renamed `.system` socket.
 
-No separate LaunchAgent or SSH config is needed — the `run` command handles everything.
+On shutdown, the proxy restores the original socket. No separate LaunchAgent or SSH config is needed — the `run` command handles everything.
 
 ## Uninstall
 
@@ -146,10 +146,14 @@ rm -f ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 
 ### 2. Restore SSH_AUTH_SOCK
 
-Reboot to restore the original `SSH_AUTH_SOCK`, or restore it immediately:
+If the agent was running, it restores the original socket on shutdown automatically. If the system socket is still symlinked (e.g. after a crash), reboot or restore manually:
 
 ```shell
-launchctl setenv SSH_AUTH_SOCK "$(cat ~/.keepassxc/ssh-agent.json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("system_agent_path",""))')"
+# Find the original socket path
+SYSTEM_AGENT=$(cat ~/.keepassxc/ssh-agent.json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("system_agent_path",""))')
+# Remove the symlink and restore the backup
+rm -f "$SYSTEM_AGENT"
+mv "${SYSTEM_AGENT}.system" "$SYSTEM_AGENT"
 ```
 
 ### 3. Remove config and socket
