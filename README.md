@@ -8,6 +8,7 @@ Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this to
 
 - **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
 - **Python >= 3.10**
+- **[pipx](https://github.com/pypa/pipx)** — for isolated package installation (see [pipx installation guide](https://github.com/pypa/pipx#install-pipx))
 - **KeePassXC** with:
   - **Browser Integration** enabled (Settings > Browser Integration > Enable browser integration)
   - **SSH Agent Integration** enabled (Settings > SSH Agent > Enable SSH Agent integration)
@@ -40,12 +41,6 @@ options:
   -v, --verbose       Enable verbose logging
 ```
 
-## Install
-
-```shell
-pipx install keepassxc-ssh-agent
-```
-
 ## How It Works
 
 ```
@@ -68,41 +63,52 @@ SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
    - KeePassXC pushes SSH keys to `ssh-agent` on unlock
    - Proxy retries the original request and returns the result
 
+### SSH_AUTH_SOCK Interception
 
-## Setup
+The proxy automatically intercepts `SSH_AUTH_SOCK` on startup by renaming the system ssh-agent socket (e.g. `/tmp/com.apple.launchd.XXX/Listeners`) to a `.system` backup and placing a symlink from the original path to the proxy socket. All SSH clients then connect to the proxy transparently. The proxy forwards requests to the renamed `.system` socket.
 
-### One-Time Setup
+On shutdown, the proxy restores the original socket. No separate LaunchAgent or SSH config is needed — the `run` command handles everything.
 
-Make sure KeePassXC is running with browser integration enabled, then:
+## Install
+
+Make sure KeePassXC is running and unlocked with browser integration enabled, then:
 
 ```shell
-keepassxc-ssh-agent install
+pipx install keepassxc-ssh-agent
+keepassxc-ssh-agent install -y
 ```
 
 This will:
 - Generate encryption keys for the browser protocol
 - Request association with KeePassXC (you'll need to approve it in the KeePassXC window)
 - Save the configuration to `~/.keepassxc/ssh-agent.json`
-- Optionally create a LaunchAgent for auto-start
+- Create a LaunchAgent for auto-start on login
 
-#### Install Options
+The `-y` flag auto-accepts all prompts. Without it, you'll be asked interactively whether to create the LaunchAgent.
 
-- `-y` / `--yes` — Auto-accept all prompts (non-interactive, creates the LaunchAgent automatically)
-- `--register-only` — Only register with KeePassXC, skip LaunchAgent creation
+### Manual Install
 
-Example for scripted/non-interactive install:
+If you want more control over the installation, you can split it into steps:
+
+#### 1. Install the package
 
 ```shell
-keepassxc-ssh-agent install -y
+pipx install keepassxc-ssh-agent
 ```
 
-### Manual Setup
+#### 2. Register with KeePassXC
 
-If you skipped the interactive setup prompts, here are the manual steps:
+Register with KeePassXC without creating a LaunchAgent:
 
-#### 1. Auto-Start the Agent on Login
+```shell
+keepassxc-ssh-agent install --register-only
+```
 
-Create a LaunchAgent to run `keepassxc-ssh-agent` on login:
+You'll need to approve the association in the KeePassXC window when prompted.
+
+#### 3. Create a LaunchAgent (optional)
+
+To auto-start the agent on login, create a LaunchAgent plist:
 
 ```shell
 cat << 'EOF' > ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
@@ -133,37 +139,22 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.keepassxc.ssh-agent.
 
 Replace `/path/to/keepassxc-ssh-agent` with the actual path (find it with `which keepassxc-ssh-agent`).
 
-Or start manually:
+Or start manually without a LaunchAgent:
 
 ```shell
 keepassxc-ssh-agent run
 ```
 
-#### 2. SSH_AUTH_SOCK Interception
-
-The proxy automatically intercepts `SSH_AUTH_SOCK` on startup by renaming the system ssh-agent socket (e.g. `/tmp/com.apple.launchd.XXX/Listeners`) to a `.system` backup and placing a symlink from the original path to the proxy socket. All SSH clients then connect to the proxy transparently. The proxy forwards requests to the renamed `.system` socket.
-
-On shutdown, the proxy restores the original socket. No separate LaunchAgent or SSH config is needed — the `run` command handles everything.
-
 ## Uninstall
 
-The easiest way to uninstall is:
-
 ```shell
-keepassxc-ssh-agent uninstall
-```
-
-This will stop and remove the LaunchAgent, restore the original SSH_AUTH_SOCK socket, and optionally remove the config directory (`~/.keepassxc/`). Use `-y` to skip confirmation prompts.
-
-Then remove the package itself:
-
-```shell
+keepassxc-ssh-agent uninstall -y
 pipx uninstall keepassxc-ssh-agent
 ```
 
-### Manual Uninstall
+This stops and removes the LaunchAgent, restores the original SSH_AUTH_SOCK socket, and removes the config directory (`~/.keepassxc/`). Without `-y`, you'll be asked before deleting the config directory.
 
-If you prefer to uninstall manually:
+### Manual Uninstall
 
 #### 1. Stop and remove the LaunchAgent
 
