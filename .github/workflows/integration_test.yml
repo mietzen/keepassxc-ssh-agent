@@ -67,13 +67,20 @@ jobs:
 
       - name: Start KeePassXC
         run: |
-          # Start KeePassXC with test database, password via stdin
-          # Use process substitution to keep stdin open (KeePassXC exits when stdin closes)
-          keepassxc --pw-stdin /tmp/test.kdbx \
-            < <(echo "testpassword"; sleep infinity) \
+          # Create a FIFO to feed password to KeePassXC while keeping stdin open
+          mkfifo /tmp/keepassxc-stdin
+
+          # Start KeePassXC reading from the FIFO
+          nohup keepassxc --pw-stdin /tmp/test.kdbx \
+            < /tmp/keepassxc-stdin \
             > /tmp/keepassxc-stdout.log 2> /tmp/keepassxc-stderr.log &
           KEEPASSXC_PID=$!
           echo "KEEPASSXC_PID=$KEEPASSXC_PID" >> $GITHUB_ENV
+          disown $KEEPASSXC_PID
+
+          # Send password through FIFO (keeps fd open via background sleep)
+          (echo "testpassword"; sleep 600) > /tmp/keepassxc-stdin &
+          echo "KEEPASSXC_STDIN_PID=$!" >> $GITHUB_ENV
 
           # Wait for the browser socket to appear
           echo "Waiting for KeePassXC browser socket..."
@@ -107,24 +114,29 @@ jobs:
           # Give KeePassXC a moment to fully initialize the browser server
           sleep 2
 
+          # Verify KeePassXC is still alive after init
+          if kill -0 $KEEPASSXC_PID 2>/dev/null; then
+            echo "KeePassXC is running (PID: $KEEPASSXC_PID)"
+          else
+            echo "ERROR: KeePassXC died after socket creation"
+            echo "--- stdout ---"
+            cat /tmp/keepassxc-stdout.log 2>/dev/null || true
+            echo "--- stderr ---"
+            cat /tmp/keepassxc-stderr.log 2>/dev/null || true
+            exit 1
+          fi
+
       - name: Debug KeePassXC state
+        if: always()
         run: |
-          echo "--- KeePassXC process ---"
-          ps aux | grep keepassxc || true
+          echo "--- KeePassXC process tree ---"
+          ps aux | grep -E "keepassxc|sleep 600" | grep -v grep || echo "No KeePassXC processes found"
           echo "--- KeePassXC stdout ---"
           cat /tmp/keepassxc-stdout.log 2>/dev/null || true
           echo "--- KeePassXC stderr ---"
           cat /tmp/keepassxc-stderr.log 2>/dev/null || true
-          echo "--- Socket file ---"
-          SOCKET_PATH="${XDG_RUNTIME_DIR}/app/org.keepassxc.KeePassXC/org.keepassxc.KeePassXC.BrowserServer"
-          LEGACY_PATH="${XDG_RUNTIME_DIR}/org.keepassxc.KeePassXC.BrowserServer"
-          ls -la "$SOCKET_PATH" 2>/dev/null || ls -la "$LEGACY_PATH" 2>/dev/null || echo "No socket found"
-          echo "--- Socket type check ---"
-          file "$SOCKET_PATH" 2>/dev/null || file "$LEGACY_PATH" 2>/dev/null || true
-          echo "--- Try socat connection ---"
-          timeout 2 socat - UNIX-CONNECT:"$SOCKET_PATH" < /dev/null 2>&1 || \
-          timeout 2 socat - UNIX-CONNECT:"$LEGACY_PATH" < /dev/null 2>&1 || \
-          echo "socat connection failed (socat may not be installed)"
+          echo "--- Socket files ---"
+          find "${XDG_RUNTIME_DIR}" -name "*KeePassXC*" -ls 2>/dev/null || echo "No socket files found"
           echo "--- Python connection test ---"
           python3 -c "
           import socket, os
@@ -135,7 +147,6 @@ jobs:
           ]:
               if os.path.exists(path):
                   print(f'Found socket: {path}')
-                  print(f'  stat: {os.stat(path)}')
                   try:
                       s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                       s.settimeout(2)
@@ -164,4 +175,5 @@ jobs:
         if: always()
         run: |
           kill ${{ env.KEEPASSXC_PID }} 2>/dev/null || true
+          kill ${{ env.KEEPASSXC_STDIN_PID }} 2>/dev/null || true
           kill ${{ env.DBUS_SESSION_BUS_PID }} 2>/dev/null || true
