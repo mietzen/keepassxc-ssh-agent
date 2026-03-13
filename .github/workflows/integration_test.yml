@@ -45,13 +45,15 @@ jobs:
       - name: Configure KeePassXC for browser integration
         run: |
           mkdir -p ~/.config/keepassxc
-          cat > ~/.config/keepassxc/keepassxc.ini << 'EOF'
+          cat > ~/.config/keepassxc/keepassxc.ini << 'EOCONFIG'
           [General]
           ConfigVersion=2
 
           [Browser]
           Enabled=true
-          EOF
+          EOCONFIG
+          echo "--- Config file contents ---"
+          cat -A ~/.config/keepassxc/keepassxc.ini
 
       - name: Start Xvfb and D-Bus session
         run: |
@@ -66,7 +68,9 @@ jobs:
       - name: Start KeePassXC
         run: |
           # Start KeePassXC with test database, password via stdin
-          echo "testpassword" | keepassxc --pw-stdin /tmp/test.kdbx &
+          # Redirect output to log files for debugging
+          echo "testpassword" | keepassxc --pw-stdin /tmp/test.kdbx \
+            > /tmp/keepassxc-stdout.log 2> /tmp/keepassxc-stderr.log &
           KEEPASSXC_PID=$!
           echo "KEEPASSXC_PID=$KEEPASSXC_PID" >> $GITHUB_ENV
 
@@ -82,6 +86,10 @@ jobs:
             # Check KeePassXC is still running
             if ! kill -0 $KEEPASSXC_PID 2>/dev/null; then
               echo "ERROR: KeePassXC process died"
+              echo "--- stdout ---"
+              cat /tmp/keepassxc-stdout.log 2>/dev/null || true
+              echo "--- stderr ---"
+              cat /tmp/keepassxc-stderr.log 2>/dev/null || true
               exit 1
             fi
             sleep 1
@@ -98,11 +106,58 @@ jobs:
           # Give KeePassXC a moment to fully initialize the browser server
           sleep 2
 
+      - name: Debug KeePassXC state
+        run: |
+          echo "--- KeePassXC process ---"
+          ps aux | grep keepassxc || true
+          echo "--- KeePassXC stdout ---"
+          cat /tmp/keepassxc-stdout.log 2>/dev/null || true
+          echo "--- KeePassXC stderr ---"
+          cat /tmp/keepassxc-stderr.log 2>/dev/null || true
+          echo "--- Socket file ---"
+          SOCKET_PATH="${XDG_RUNTIME_DIR}/app/org.keepassxc.KeePassXC/org.keepassxc.KeePassXC.BrowserServer"
+          LEGACY_PATH="${XDG_RUNTIME_DIR}/org.keepassxc.KeePassXC.BrowserServer"
+          ls -la "$SOCKET_PATH" 2>/dev/null || ls -la "$LEGACY_PATH" 2>/dev/null || echo "No socket found"
+          echo "--- Socket type check ---"
+          file "$SOCKET_PATH" 2>/dev/null || file "$LEGACY_PATH" 2>/dev/null || true
+          echo "--- Try socat connection ---"
+          timeout 2 socat - UNIX-CONNECT:"$SOCKET_PATH" < /dev/null 2>&1 || \
+          timeout 2 socat - UNIX-CONNECT:"$LEGACY_PATH" < /dev/null 2>&1 || \
+          echo "socat connection failed (socat may not be installed)"
+          echo "--- Python connection test ---"
+          python3 -c "
+          import socket, os
+          xdg = os.environ.get('XDG_RUNTIME_DIR', '')
+          for path in [
+              os.path.join(xdg, 'app/org.keepassxc.KeePassXC/org.keepassxc.KeePassXC.BrowserServer'),
+              os.path.join(xdg, 'org.keepassxc.KeePassXC.BrowserServer'),
+          ]:
+              if os.path.exists(path):
+                  print(f'Found socket: {path}')
+                  print(f'  stat: {os.stat(path)}')
+                  try:
+                      s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                      s.settimeout(2)
+                      s.connect(path)
+                      print('  Connected OK!')
+                      s.close()
+                  except Exception as e:
+                      print(f'  Connect failed: {e}')
+          "
+
       - name: Run integration tests
         env:
           KEEPASSXC_INTEGRATION_TEST: '1'
         run: |
           pytest tests/test_integration.py -v
+
+      - name: Dump KeePassXC logs
+        if: always()
+        run: |
+          echo "--- KeePassXC stdout ---"
+          cat /tmp/keepassxc-stdout.log 2>/dev/null || true
+          echo "--- KeePassXC stderr ---"
+          cat /tmp/keepassxc-stderr.log 2>/dev/null || true
 
       - name: Stop KeePassXC
         if: always()
