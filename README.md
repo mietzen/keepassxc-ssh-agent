@@ -4,28 +4,6 @@
 
 Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this tool sits between your SSH client and the system `ssh-agent`. When SSH requests a key that isn't loaded (because the KeePassXC database is locked), the proxy triggers KeePassXC's unlock dialog. After you authenticate with TouchID, KeePassXC pushes the keys to `ssh-agent`, and the SSH operation continues seamlessly.
 
-## How It Works
-
-```
-SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
-                                             │
-                                             ├─► SSH agent protocol ──► System ssh-agent
-                                             │   (forward requests / replay after unlock)
-                                             │
-                                             └─► Browser extension protocol ──► KeePassXC
-                                                 (trigger unlock when keys missing)
-```
-
-1. SSH client connects to the proxy socket and requests identities or a signature
-2. Proxy forwards the request to the system `ssh-agent`
-3. If `ssh-agent` returns keys/signature, proxy passes it through (no delay)
-4. If `ssh-agent` returns empty/failure (DB is locked, keys not loaded):
-   - Proxy connects to KeePassXC via the browser extension protocol
-   - Sends `get-databasehash` with `triggerUnlock` to show the unlock dialog
-   - Polls until the database is unlocked or timeout expires
-   - KeePassXC pushes SSH keys to `ssh-agent` on unlock
-   - Proxy retries the original request and returns the result
-
 ## Prerequisites
 
 - **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
@@ -67,7 +45,30 @@ options:
 pip install .
 ```
 
-## Quick Start
+## How It Works
+
+```
+SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
+                                             │
+                                             ├─► SSH agent protocol ──► System ssh-agent
+                                             │   (forward requests / replay after unlock)
+                                             │
+                                             └─► Browser extension protocol ──► KeePassXC
+                                                 (trigger unlock when keys missing)
+```
+
+1. SSH client connects to the proxy socket and requests identities or a signature
+2. Proxy forwards the request to the system `ssh-agent`
+3. If `ssh-agent` returns keys/signature, proxy passes it through (no delay)
+4. If `ssh-agent` returns empty/failure (DB is locked, keys not loaded):
+   - Proxy connects to KeePassXC via the browser extension protocol
+   - Sends `get-databasehash` with `triggerUnlock` to show the unlock dialog
+   - Polls until the database is unlocked or timeout expires
+   - KeePassXC pushes SSH keys to `ssh-agent` on unlock
+   - Proxy retries the original request and returns the result
+
+
+## Setup
 
 ### One-Time Setup
 
