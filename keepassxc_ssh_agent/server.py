@@ -52,10 +52,16 @@ class SSHAgentProxy:
             sock_path.unlink()
 
         sock_path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(sock_path.parent), stat.S_IRWXU)
 
         self._server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._server_socket.bind(str(sock_path))
-        # Set socket permissions to owner only
+        # Set restrictive umask before bind to avoid a window where the
+        # socket is world-accessible between bind() and chmod().
+        old_umask = os.umask(0o077)
+        try:
+            self._server_socket.bind(str(sock_path))
+        finally:
+            os.umask(old_umask)
         os.chmod(str(sock_path), stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
         self._server_socket.listen(5)
         self._server_socket.settimeout(1.0)  # Allow periodic check for shutdown

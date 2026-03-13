@@ -28,7 +28,8 @@ def main() -> None:
         "--timeout",
         type=int,
         default=30,
-        help="Timeout in seconds for unlock prompt (default: 30)",
+        metavar="SECONDS",
+        help="Timeout in seconds for unlock prompt (1-600, default: 30)",
     )
     common.add_argument(
         "-v", "--verbose",
@@ -85,6 +86,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if not 1 <= args.timeout <= 600:
+        parser.error("--timeout must be between 1 and 600 seconds")
+
     # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
@@ -137,6 +141,13 @@ def _find_agent_bin() -> str:
 
 def _get_run_plist(agent_bin: str) -> str:
     """Generate LaunchAgent plist that starts keepassxc-ssh-agent run on login."""
+    import os
+    import stat
+
+    log_dir = Path.home() / ".keepassxc" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(str(log_dir), stat.S_IRWXU)
+
     args_block = f"    <string>{agent_bin}</string>\n    <string>run</string>"
     if agent_bin == sys.executable:
         args_block = (
@@ -161,9 +172,9 @@ def _get_run_plist(agent_bin: str) -> str:
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/tmp/keepassxc-ssh-agent.out.log</string>
+  <string>{log_dir / "out.log"}</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/keepassxc-ssh-agent.err.log</string>
+  <string>{log_dir / "err.log"}</string>
 </dict>
 </plist>
 """
@@ -344,6 +355,9 @@ def _intercept_ssh_auth_sock(config: Config, config_path: Path) -> str:
     Returns the path to forward requests to (the renamed real agent socket).
     """
     import os
+    import stat
+
+    logger = logging.getLogger(__name__)
 
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
     our_socket = str(Path(config.socket_path).resolve())
@@ -375,6 +389,11 @@ def _intercept_ssh_auth_sock(config: Config, config_path: Path) -> str:
 
     # Case 3: Normal startup - real socket exists
     if sock_path.exists() and not sock_path.is_symlink():
+        # Verify it's actually a socket, not a regular file or other type
+        if not stat.S_ISSOCK(sock_path.stat().st_mode):
+            logger.warning("SSH_AUTH_SOCK path %s is not a socket, skipping interception", sock_path)
+            return config.system_agent_path or ""
+
         # Save the original SSH_AUTH_SOCK path
         if config.system_agent_path != ssh_auth_sock:
             config.system_agent_path = ssh_auth_sock
@@ -386,6 +405,15 @@ def _intercept_ssh_auth_sock(config: Config, config_path: Path) -> str:
 
         os.rename(str(sock_path), str(backup_path))
         os.symlink(our_socket, str(sock_path))
+
+        # Verify symlink points where we expect
+        actual_target = str(Path(os.readlink(str(sock_path))).resolve())
+        if actual_target != our_socket:
+            logger.error("Symlink target mismatch: expected %s, got %s", our_socket, actual_target)
+            sock_path.unlink()
+            os.rename(str(backup_path), str(sock_path))
+            return config.system_agent_path or ""
+
         return str(backup_path)
 
     # Fallback to saved path
@@ -398,16 +426,31 @@ def _intercept_ssh_auth_sock(config: Config, config_path: Path) -> str:
     return ""
 
 
-def _restore_ssh_auth_sock(ssh_auth_sock: str) -> None:
+def _restore_ssh_auth_sock(ssh_auth_sock: str, proxy_socket_path: str = "") -> None:
     """Restore the original ssh-agent socket on shutdown."""
+    import os
+
     if not ssh_auth_sock:
         return
 
+    logger = logging.getLogger(__name__)
     sock_path = Path(ssh_auth_sock)
     backup_path = Path(ssh_auth_sock + SYSTEM_SOCKET_SUFFIX)
 
-    # Remove our symlink
+    # Remove our symlink (only if it actually points to our proxy socket)
     if sock_path.is_symlink():
+        if proxy_socket_path:
+            try:
+                target = str(Path(os.readlink(str(sock_path))).resolve())
+                expected = str(Path(proxy_socket_path).resolve())
+                if target != expected:
+                    logger.warning(
+                        "Symlink at %s points to %s, not our proxy %s; leaving it alone",
+                        sock_path, target, expected,
+                    )
+                    return
+            except OSError:
+                pass
         try:
             sock_path.unlink()
         except OSError:
@@ -437,7 +480,7 @@ def _cmd_uninstall(config: Config, config_path: Path, *, yes: bool = False) -> N
     print()
     print("SSH_AUTH_SOCK:")
     if config.system_agent_path:
-        _restore_ssh_auth_sock(config.system_agent_path)
+        _restore_ssh_auth_sock(config.system_agent_path, proxy_socket_path=config.socket_path)
         print(f"  Restored {config.system_agent_path}")
     else:
         print("  No saved system agent path, nothing to restore.")
@@ -502,7 +545,7 @@ def _cmd_run(config: Config, config_path: Path | None = None) -> None:
         print(f"ERROR: {e}")
         sys.exit(1)
     finally:
-        _restore_ssh_auth_sock(ssh_auth_sock)
+        _restore_ssh_auth_sock(ssh_auth_sock, proxy_socket_path=config.socket_path)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,7 @@ class Config:
     def save(self, path: Path | None = None) -> None:
         path = path or DEFAULT_CONFIG_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(path.parent), stat.S_IRWXU)
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
         # Restrict permissions to owner only
@@ -86,5 +87,14 @@ class Config:
         path = path or DEFAULT_CONFIG_PATH
         if not path.exists():
             return cls()
+        # Warn if config file has overly permissive permissions
+        mode = path.stat().st_mode
+        if mode & 0o077:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Config file %s has insecure permissions %o; expected 0600. "
+                "Fix with: chmod 600 %s",
+                path, mode & 0o777, path,
+            )
         with open(path) as f:
             return cls.from_dict(json.load(f))
