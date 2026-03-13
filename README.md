@@ -42,7 +42,7 @@ options:
 ## Install
 
 ```shell
-pip install .
+pipx install keepassxc-ssh-agent
 ```
 
 ## How It Works
