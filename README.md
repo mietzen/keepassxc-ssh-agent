@@ -1,0 +1,185 @@
+# KeePassXC SSH Agent
+
+`keepassxc-ssh-agent` is an SSH `IdentityAgent` proxy for macOS that automatically triggers KeePassXC database unlock (via TouchID / Quick Unlock) when an SSH key is needed.
+
+Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this tool sits between your SSH client and the system `ssh-agent`. When SSH requests a key that isn't loaded (because the KeePassXC database is locked), the proxy triggers KeePassXC's unlock dialog. After you authenticate with TouchID, KeePassXC pushes the keys to `ssh-agent`, and the SSH operation continues seamlessly.
+
+## How It Works
+
+```
+SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
+                                             │
+                                             ├─► SSH agent protocol ──► System ssh-agent
+                                             │   (forward requests / replay after unlock)
+                                             │
+                                             └─► Browser extension protocol ──► KeePassXC
+                                                 (trigger unlock when keys missing)
+```
+
+1. SSH client connects to the proxy socket and requests identities or a signature
+2. Proxy forwards the request to the system `ssh-agent`
+3. If `ssh-agent` returns keys/signature, proxy passes it through (no delay)
+4. If `ssh-agent` returns empty/failure (DB is locked, keys not loaded):
+   - Proxy connects to KeePassXC via the browser extension protocol
+   - Sends `get-databasehash` with `triggerUnlock` to show the unlock dialog
+   - Polls until the database is unlocked or timeout expires
+   - KeePassXC pushes SSH keys to `ssh-agent` on unlock
+   - Proxy retries the original request and returns the result
+
+## Prerequisites
+
+- **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
+- **Python >= 3.10**
+- **KeePassXC** with:
+  - **Browser Integration** enabled (Settings > Browser Integration > Enable browser integration)
+  - **SSH Agent Integration** enabled (Settings > SSH Agent > Enable SSH Agent integration)
+  - SSH keys configured with "Add key to agent when database is opened/unlocked"
+- A running **ssh-agent** (`SSH_AUTH_SOCK` must be set)
+
+## Usage
+
+```
+usage: keepassxc-ssh-agent [-h] [--socket SOCKET] [--config CONFIG]
+                           [--timeout TIMEOUT] [-v]
+                           {setup,run,status} ...
+
+SSH IdentityAgent proxy that triggers KeePassXC database unlock via TouchID
+
+positional arguments:
+  {setup,run,status}
+    setup             Associate with KeePassXC (one-time setup)
+    run               Start the SSH agent proxy (default command)
+    status            Check connection status with KeePassXC
+
+options:
+  -h, --help          show this help message and exit
+  --socket SOCKET     Path for the agent Unix socket
+                      (default: ~/.keepassxc/agent.sock)
+  --config CONFIG     Path to config file
+                      (default: ~/.keepassxc/ssh-agent.json)
+  --timeout TIMEOUT   Timeout in seconds for unlock prompt (default: 30)
+  -v, --verbose       Enable verbose logging
+```
+
+## Install
+
+```shell
+pip install .
+```
+
+## Quick Start
+
+### One-Time Setup
+
+Make sure KeePassXC is running with browser integration enabled, then:
+
+```shell
+keepassxc-ssh-agent setup
+```
+
+This will:
+- Generate encryption keys for the browser protocol
+- Request association with KeePassXC (you'll need to approve it in the KeePassXC window)
+- Save the configuration to `~/.keepassxc/ssh-agent.json`
+- Automatically configure your `~/.ssh/config` and create a LaunchAgent for auto-start (Optionally)
+
+### Manual Setup
+
+If you skipped the interactive setup prompts, here are the manual steps:
+
+#### 1. Auto-Start the Agent on Login
+
+Create a LaunchAgent to run `keepassxc-ssh-agent` on login:
+
+```shell
+cat << 'EOF' > ~/Library/LaunchAgents/com.keepassxc.ssh-agent.plist
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.keepassxc.ssh-agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/keepassxc-ssh-agent</string>
+    <string>run</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/keepassxc-ssh-agent.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/keepassxc-ssh-agent.err.log</string>
+</dict>
+</plist>
+EOF
+launchctl load -w ~/Library/LaunchAgents/com.keepassxc.ssh-agent.plist
+```
+
+Replace `/path/to/keepassxc-ssh-agent` with the actual path (find it with `which keepassxc-ssh-agent`).
+
+Or start manually:
+
+```shell
+keepassxc-ssh-agent run
+```
+
+#### 2. Route SSH Through the Proxy
+
+There are two ways to route SSH through the proxy. Choose one:
+
+**Option A: LaunchAgent symlink (recommended, like Strongbox)**
+
+This symlinks the proxy socket to `$SSH_AUTH_SOCK`, so all SSH clients automatically use it:
+
+```shell
+cat << 'EOF' > ~/Library/LaunchAgents/com.keepassxc.SSH_AUTH_SOCK.plist
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.keepassxc.SSH_AUTH_SOCK</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>/bin/ln -sf $HOME/.keepassxc/agent.sock $SSH_AUTH_SOCK</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+launchctl load -w ~/Library/LaunchAgents/com.keepassxc.SSH_AUTH_SOCK.plist
+```
+
+**Option B: SSH config**
+
+Add an `IdentityAgent` directive to `~/.ssh/config`:
+
+```
+Host *
+    IdentityAgent "~/.keepassxc/agent.sock"
+```
+
+## Known Limitations
+
+- **macOS only**: Uses KeePassXC's browser extension Unix socket at `$TMPDIR/org.keepassxc.KeePassXC.BrowserServer`
+- **DB unlocked but agent cleared**: If the database is already unlocked but `ssh-agent` keys were manually removed (`ssh-add -D`), the proxy detects empty keys and triggers "unlock", but KeePassXC reports "already unlocked" without reloading keys. Workaround: lock and re-unlock the database in KeePassXC.
+- **Multiple databases**: `triggerUnlock` only works for the currently active database tab in KeePassXC.
+
+## Development
+
+```shell
+# Install with dev dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Run tests with coverage
+pytest --cov=keepassxc_ssh_agent
+```
