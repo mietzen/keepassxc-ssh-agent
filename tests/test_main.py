@@ -156,16 +156,21 @@ class TestRemoveLaunchAgent:
 
 
 class TestInterceptSSHAuthSock:
-    def test_normal_startup_renames_and_symlinks(self, tmp_path, monkeypatch):
+    def test_normal_startup_renames_and_symlinks(self, short_tmp, monkeypatch):
         """Case 3: Real socket exists - rename to .system, symlink ours."""
+        import socket as sock_mod
+
         from keepassxc_ssh_agent.config import Config
 
-        real_sock = tmp_path / "Listeners"
-        real_sock.touch()
-        proxy_sock = tmp_path / "proxy.sock"
+        real_sock = Path(short_tmp) / "Listeners"
+        # Create a real Unix socket (not just a regular file)
+        s = sock_mod.socket(sock_mod.AF_UNIX, sock_mod.SOCK_STREAM)
+        s.bind(str(real_sock))
+        s.close()
+        proxy_sock = Path(short_tmp) / "proxy.sock"
 
         config = Config(socket_path=str(proxy_sock))
-        config_path = tmp_path / "config.json"
+        config_path = Path(short_tmp) / "config.json"
 
         monkeypatch.setenv("SSH_AUTH_SOCK", str(real_sock))
 

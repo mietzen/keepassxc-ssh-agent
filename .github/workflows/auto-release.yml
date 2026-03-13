@@ -19,8 +19,14 @@ jobs:
         id: get-version
         run: |
           LATEST_TAG=$(curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" | jq -r '.name')
-          URL='https://gist.githubusercontent.com/mietzen/cd33efb65f91619201a45ac50dcfc29e/raw/bump-version'
-          echo "version=v$(wget -qO - ${URL} | bash -s ${LATEST_TAG} minor)" >> $GITHUB_OUTPUT
+          # Strip leading 'v' if present
+          VERSION="${LATEST_TAG#v}"
+          # Parse semver components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          # Bump minor, reset patch
+          MINOR=$((MINOR + 1))
+          PATCH=0
+          echo "version=v${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
       - uses: actions/create-github-app-token@v2
         id: generate-token
         with:

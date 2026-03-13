@@ -40,12 +40,16 @@ def _b64decode(data: str) -> bytes:
 
 
 def _increment_nonce(nonce: bytes) -> bytes:
-    """Increment a nonce by 1 (little-endian), matching sodium_increment()."""
+    """Increment a nonce by 1 (little-endian), matching sodium_increment().
+
+    Processes all bytes regardless of carry to avoid timing side-channels.
+    """
     n = bytearray(nonce)
+    carry = 1
     for i in range(len(n)):
-        n[i] = (n[i] + 1) & 0xFF
-        if n[i] != 0:
-            break
+        val = n[i] + carry
+        n[i] = val & 0xFF
+        carry = val >> 8
     return bytes(n)
 
 
