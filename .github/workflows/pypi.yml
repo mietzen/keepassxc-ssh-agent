@@ -31,6 +31,9 @@ jobs:
   Deploy:
     runs-on: ubuntu-24.04
     needs: Setup
+    environment:
+      name: pypi
+      url: https://pypi.org/p/keepassxc-ssh-agent/
     permissions:
       id-token: write
       contents: read
