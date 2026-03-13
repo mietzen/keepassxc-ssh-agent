@@ -146,6 +146,7 @@ def _get_run_plist(agent_bin: str) -> str:
 
 def _create_launchagent(label: str, content: str) -> bool:
     """Create and load a single LaunchAgent plist. Returns True on success."""
+    import os
     import subprocess
     from pathlib import Path
 
@@ -159,9 +160,10 @@ def _create_launchagent(label: str, content: str) -> bool:
     plist_path.write_text(content)
     print(f"  Created {plist_path}")
 
+    uid = os.getuid()
     try:
         subprocess.run(
-            ["launchctl", "load", "-w", str(plist_path)],
+            ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
             check=True,
             capture_output=True,
         )
@@ -169,7 +171,7 @@ def _create_launchagent(label: str, content: str) -> bool:
         return True
     except subprocess.CalledProcessError as e:
         print(f"  Warning: Failed to load: {e.stderr.decode().strip()}")
-        print(f"  You can load it manually: launchctl load -w {plist_path}")
+        print(f"  You can load it manually: launchctl bootstrap gui/{uid} {plist_path}")
         return False
 
 
@@ -301,18 +303,29 @@ def _resolve_system_agent(config: Config, config_path) -> str:
     return ""
 
 
-def _setenv_ssh_auth_sock(socket_path: str) -> None:
-    """Set SSH_AUTH_SOCK for all new launchd-spawned processes."""
+def _setenv_ssh_auth_sock(socket_path: str) -> bool:
+    """Set SSH_AUTH_SOCK for all new launchd-spawned processes.
+
+    Uses 'launchctl setenv' which only affects processes spawned by launchd
+    AFTER this call. Already-running terminals/apps are not affected.
+    """
+    import logging
     import subprocess
 
+    logger = logging.getLogger(__name__)
     try:
         subprocess.run(
             ["launchctl", "setenv", "SSH_AUTH_SOCK", socket_path],
             check=True,
             capture_output=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass  # Non-fatal: works without setenv (e.g. on Linux or in tests)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.warning("launchctl setenv failed: %s", e.stderr.decode().strip() if e.stderr else str(e))
+        return False
+    except FileNotFoundError:
+        logger.debug("launchctl not found (not macOS?)")
+        return False
 
 
 def _cmd_run(config: Config, config_path=None):

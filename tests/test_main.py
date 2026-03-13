@@ -151,7 +151,8 @@ class TestResolveSystemAgent:
 class TestSetenvSSHAuthSock:
     def test_calls_launchctl_setenv(self):
         with patch("subprocess.run") as mock_run:
-            _setenv_ssh_auth_sock("/tmp/proxy.sock")
+            result = _setenv_ssh_auth_sock("/tmp/proxy.sock")
+            assert result is True
             mock_run.assert_called_once_with(
                 ["launchctl", "setenv", "SSH_AUTH_SOCK", "/tmp/proxy.sock"],
                 check=True,
@@ -160,14 +161,14 @@ class TestSetenvSSHAuthSock:
 
     def test_handles_failure_gracefully(self):
         import subprocess
-        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "launchctl")):
-            # Should not raise
-            _setenv_ssh_auth_sock("/tmp/proxy.sock")
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "launchctl", stderr=b"error")):
+            result = _setenv_ssh_auth_sock("/tmp/proxy.sock")
+            assert result is False
 
     def test_handles_missing_launchctl(self):
         with patch("subprocess.run", side_effect=FileNotFoundError):
-            # Should not raise (e.g. on Linux)
-            _setenv_ssh_auth_sock("/tmp/proxy.sock")
+            result = _setenv_ssh_auth_sock("/tmp/proxy.sock")
+            assert result is False
 
 
 class TestFindAgentBin:
