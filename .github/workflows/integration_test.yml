@@ -53,17 +53,22 @@ jobs:
           Enabled=true
           EOF
 
-      - name: Start KeePassXC under Xvfb
+      - name: Start Xvfb and D-Bus session
         run: |
-          export DISPLAY=:99
           Xvfb :99 -screen 0 1024x768x24 &
-          sleep 2
+          echo "DISPLAY=:99" >> $GITHUB_ENV
 
+          # Start a D-Bus session bus (required for KeePassXC browser integration)
+          eval $(dbus-launch --sh-syntax)
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
+          echo "DBUS_SESSION_BUS_PID=$DBUS_SESSION_BUS_PID" >> $GITHUB_ENV
+
+      - name: Start KeePassXC
+        run: |
           # Start KeePassXC with test database, password via stdin
           echo "testpassword" | keepassxc --pw-stdin /tmp/test.kdbx &
           KEEPASSXC_PID=$!
           echo "KEEPASSXC_PID=$KEEPASSXC_PID" >> $GITHUB_ENV
-          echo "DISPLAY=:99" >> $GITHUB_ENV
 
           # Wait for the browser socket to appear
           echo "Waiting for KeePassXC browser socket..."
@@ -73,6 +78,11 @@ jobs:
             if [ -S "$SOCKET_PATH" ] || [ -S "$LEGACY_PATH" ]; then
               echo "Browser socket found after ${i}s"
               break
+            fi
+            # Check KeePassXC is still running
+            if ! kill -0 $KEEPASSXC_PID 2>/dev/null; then
+              echo "ERROR: KeePassXC process died"
+              exit 1
             fi
             sleep 1
           done
@@ -85,10 +95,12 @@ jobs:
             exit 1
           fi
 
+          # Give KeePassXC a moment to fully initialize the browser server
+          sleep 2
+
       - name: Run integration tests
         env:
           KEEPASSXC_INTEGRATION_TEST: '1'
-          DISPLAY: ':99'
         run: |
           pytest tests/test_integration.py -v
 
@@ -96,3 +108,4 @@ jobs:
         if: always()
         run: |
           kill ${{ env.KEEPASSXC_PID }} 2>/dev/null || true
+          kill ${{ env.DBUS_SESSION_BUS_PID }} 2>/dev/null || true
