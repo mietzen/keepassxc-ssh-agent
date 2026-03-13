@@ -62,9 +62,12 @@ class SSHAgentProxy:
         logger.info("SSH agent proxy listening on %s", sock_path)
         logger.info("Forwarding to system agent at %s", self._system_agent_path)
 
-        # Handle graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Handle graceful shutdown (only works in main thread)
+        try:
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+        except ValueError:
+            pass  # Not in main thread (e.g. during tests)
 
         try:
             while self._running:

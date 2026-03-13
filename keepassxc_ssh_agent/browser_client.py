@@ -10,7 +10,6 @@ import logging
 import os
 import socket
 import tempfile
-import uuid
 from typing import Optional
 
 import nacl.public
