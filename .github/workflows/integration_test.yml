@@ -68,8 +68,9 @@ jobs:
       - name: Start KeePassXC
         run: |
           # Start KeePassXC with test database, password via stdin
-          # Redirect output to log files for debugging
-          echo "testpassword" | keepassxc --pw-stdin /tmp/test.kdbx \
+          # Use process substitution to keep stdin open (KeePassXC exits when stdin closes)
+          keepassxc --pw-stdin /tmp/test.kdbx \
+            < <(echo "testpassword"; sleep infinity) \
             > /tmp/keepassxc-stdout.log 2> /tmp/keepassxc-stderr.log &
           KEEPASSXC_PID=$!
           echo "KEEPASSXC_PID=$KEEPASSXC_PID" >> $GITHUB_ENV
