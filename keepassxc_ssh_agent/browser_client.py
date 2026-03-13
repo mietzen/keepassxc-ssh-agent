@@ -4,14 +4,16 @@ Implements the NaCl-encrypted protocol used by the KeePassXC browser extension
 to communicate with the KeePassXC application. Used to trigger database unlock.
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
 import os
 import socket
 import tempfile
-from typing import Optional
 
+import nacl.exceptions
 import nacl.public
 import nacl.utils
 
@@ -52,8 +54,8 @@ class BrowserClient:
 
     def __init__(self, config: Config):
         self.config = config
-        self._socket: Optional[socket.socket] = None
-        self._server_public_key: Optional[nacl.public.PublicKey] = None
+        self._socket: socket.socket | None = None
+        self._server_public_key: nacl.public.PublicKey | None = None
 
         # Load or generate client keypair
         if config.client_public_key and config.client_secret_key:
@@ -81,6 +83,7 @@ class BrowserClient:
             return False
 
     def disconnect(self) -> None:
+        """Close the connection and clear session state."""
         if self._socket:
             try:
                 self._socket.close()
@@ -89,7 +92,7 @@ class BrowserClient:
             self._socket = None
             self._server_public_key = None
 
-    def _send_json(self, msg: dict) -> Optional[dict]:
+    def _send_json(self, msg: dict) -> dict | None:
         """Send a JSON message and read the JSON response."""
         if not self._socket:
             return None
@@ -129,7 +132,7 @@ class BrowserClient:
         ciphertext = encrypted.ciphertext  # This is mac + ciphertext (no nonce prefix)
         return _b64encode(ciphertext)
 
-    def _decrypt(self, encrypted_b64: str, nonce: bytes) -> Optional[dict]:
+    def _decrypt(self, encrypted_b64: str, nonce: bytes) -> dict | None:
         """Decrypt a NaCl-encrypted message."""
         if not self._server_public_key:
             return None
@@ -139,7 +142,7 @@ class BrowserClient:
             ciphertext = _b64decode(encrypted_b64)
             plaintext = box.decrypt(ciphertext, nonce)
             return json.loads(plaintext)
-        except Exception as e:
+        except (nacl.exceptions.CryptoError, json.JSONDecodeError, ValueError) as e:
             logger.error("Failed to decrypt message: %s", e)
             return None
 
@@ -170,7 +173,7 @@ class BrowserClient:
         logger.debug("Key exchange successful")
         return True
 
-    def associate(self) -> Optional[Association]:
+    def associate(self) -> Association | None:
         """Associate with KeePassXC (one-time, requires user approval).
 
         Returns the Association on success, or None on failure.
@@ -261,7 +264,7 @@ class BrowserClient:
 
         return True
 
-    def _send_get_databasehash(self, trigger_unlock: bool = False) -> Optional[dict]:
+    def _send_get_databasehash(self, trigger_unlock: bool = False) -> dict | None:
         """Send a get-databasehash request.
 
         Returns the response dict, or None on communication error.
@@ -388,8 +391,6 @@ class BrowserClient:
             if not association:
                 return False
 
-            # Save config with the new association
-            self.config.save()
             print(f"Association successful! ID: {association.id}")
             return True
         finally:

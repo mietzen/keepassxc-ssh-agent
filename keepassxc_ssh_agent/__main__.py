@@ -1,13 +1,17 @@
 """CLI entry point for keepassxc-ssh-agent."""
 
+from __future__ import annotations
+
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from .config import Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH
 
 
-def main():
+def main() -> None:
+    """Parse arguments and dispatch to the appropriate subcommand."""
     # Common arguments shared by all subcommands
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -40,10 +44,20 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser(
-        "setup",
+    install_parser = subparsers.add_parser(
+        "install",
         parents=[common],
-        help="Associate with KeePassXC (one-time setup)",
+        help="Associate with KeePassXC and install LaunchAgent",
+    )
+    install_parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Auto-accept all prompts (non-interactive)",
+    )
+    install_parser.add_argument(
+        "--register-only",
+        action="store_true",
+        help="Only register with KeePassXC, skip LaunchAgent creation",
     )
 
     subparsers.add_parser(
@@ -58,6 +72,17 @@ def main():
         help="Check connection status with KeePassXC",
     )
 
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        parents=[common],
+        help="Remove LaunchAgent and restore SSH_AUTH_SOCK",
+    )
+    uninstall_parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Auto-accept all prompts (non-interactive)",
+    )
+
     args = parser.parse_args()
 
     # Configure logging
@@ -68,18 +93,18 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    from pathlib import Path
-
     config = Config.load(Path(args.config))
     config.socket_path = args.socket
     config.unlock_timeout = args.timeout
 
     command = args.command or "run"
 
-    if command == "setup":
-        _cmd_setup(config, Path(args.config))
+    if command == "install":
+        _cmd_install(config, Path(args.config), yes=args.yes, register_only=args.register_only)
     elif command == "status":
         _cmd_status(config)
+    elif command == "uninstall":
+        _cmd_uninstall(config, Path(args.config), yes=args.yes)
     elif command == "run":
         _cmd_run(config, Path(args.config))
 
@@ -111,7 +136,7 @@ def _find_agent_bin() -> str:
 
 
 def _get_run_plist(agent_bin: str) -> str:
-    """LaunchAgent plist that starts keepassxc-ssh-agent run on login."""
+    """Generate LaunchAgent plist that starts keepassxc-ssh-agent run on login."""
     args_block = f"    <string>{agent_bin}</string>\n    <string>run</string>"
     if agent_bin == sys.executable:
         args_block = (
@@ -175,8 +200,36 @@ def _create_launchagent(label: str, content: str) -> bool:
         return False
 
 
-def _cmd_setup(config: Config, config_path):
-    """Run the setup/association flow."""
+def _remove_launchagent(label: str) -> bool:
+    """Stop and remove a LaunchAgent plist. Returns True if removed."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+
+    if not plist_path.exists():
+        print(f"  {plist_path} does not exist, skipping.")
+        return False
+
+    uid = os.getuid()
+    try:
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
+            check=True,
+            capture_output=True,
+        )
+        print(f"  Stopped {label}")
+    except subprocess.CalledProcessError:
+        pass  # May not be running
+
+    plist_path.unlink()
+    print(f"  Removed {plist_path}")
+    return True
+
+
+def _cmd_install(config: Config, config_path: Path, *, yes: bool = False, register_only: bool = False) -> None:
+    """Run the install/association flow."""
     import os
 
     from .browser_client import BrowserClient
@@ -186,7 +239,7 @@ def _cmd_setup(config: Config, config_path):
         print("Make sure ssh-agent is running before using 'run' command.")
         print()
 
-    print("KeePassXC SSH Agent - Setup")
+    print("KeePassXC SSH Agent - Install")
     print("=" * 40)
     print()
     print("Prerequisites:")
@@ -199,33 +252,33 @@ def _cmd_setup(config: Config, config_path):
     if client.setup():
         config.save(config_path)
         print()
-        print("Setup complete!")
+        print("Registration complete!")
 
-        # Auto-start agent on login
-        print()
-        if _ask_yes_no("Create a LaunchAgent to start keepassxc-ssh-agent on login?"):
-            agent_bin = _find_agent_bin()
-            _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
+        if not register_only:
+            # Auto-start agent on login
             print()
-            print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
-            print("  so all SSH clients use the proxy transparently.")
-        else:
-            print()
-            print("  To start manually: keepassxc-ssh-agent run")
+            if yes or _ask_yes_no("Create a LaunchAgent to start keepassxc-ssh-agent on login?"):
+                agent_bin = _find_agent_bin()
+                _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
+                print()
+                print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
+                print("  so all SSH clients use the proxy transparently.")
+            else:
+                print()
+                print("  To start manually: keepassxc-ssh-agent run")
 
         print()
         print("To start the agent now:")
         print("  keepassxc-ssh-agent run")
     else:
         print()
-        print("Setup failed. Make sure KeePassXC is running with browser integration enabled.")
+        print("Install failed. Make sure KeePassXC is running with browser integration enabled.")
         sys.exit(1)
 
 
-def _cmd_status(config: Config):
+def _cmd_status(config: Config) -> None:
     """Check connection status."""
     import os
-    from pathlib import Path
 
     from .browser_client import BrowserClient
 
@@ -263,9 +316,9 @@ def _cmd_status(config: Config):
                     break
             if not found:
                 if config.associations:
-                    print("CONNECTED but associations expired (run 'setup' again)")
+                    print("CONNECTED but associations expired (run 'install' again)")
                 else:
-                    print("CONNECTED but not associated (run 'setup')")
+                    print("CONNECTED but not associated (run 'install')")
         else:
             print("CONNECTED but key exchange failed")
         client.disconnect()
@@ -276,7 +329,7 @@ def _cmd_status(config: Config):
 SYSTEM_SOCKET_SUFFIX = ".system"
 
 
-def _intercept_ssh_auth_sock(config: Config, config_path) -> str:
+def _intercept_ssh_auth_sock(config: Config, config_path: Path) -> str:
     """Intercept SSH_AUTH_SOCK by replacing the system socket with a symlink.
 
     Renames the real ssh-agent socket to <path>.system and creates a symlink
@@ -291,7 +344,6 @@ def _intercept_ssh_auth_sock(config: Config, config_path) -> str:
     Returns the path to forward requests to (the renamed real agent socket).
     """
     import os
-    from pathlib import Path
 
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
     our_socket = str(Path(config.socket_path).resolve())
@@ -348,8 +400,6 @@ def _intercept_ssh_auth_sock(config: Config, config_path) -> str:
 
 def _restore_ssh_auth_sock(ssh_auth_sock: str) -> None:
     """Restore the original ssh-agent socket on shutdown."""
-    from pathlib import Path
-
     if not ssh_auth_sock:
         return
 
@@ -371,7 +421,52 @@ def _restore_ssh_auth_sock(ssh_auth_sock: str) -> None:
             pass
 
 
-def _cmd_run(config: Config, config_path=None):
+def _cmd_uninstall(config: Config, config_path: Path, *, yes: bool = False) -> None:
+    """Remove LaunchAgent, restore SSH_AUTH_SOCK, and optionally clean up config."""
+    import shutil
+
+    print("KeePassXC SSH Agent - Uninstall")
+    print("=" * 40)
+    print()
+
+    # Step 1: Stop and remove the LaunchAgent
+    print("LaunchAgent:")
+    _remove_launchagent(LAUNCHAGENT_RUN_LABEL)
+
+    # Step 2: Restore SSH_AUTH_SOCK
+    print()
+    print("SSH_AUTH_SOCK:")
+    if config.system_agent_path:
+        _restore_ssh_auth_sock(config.system_agent_path)
+        print(f"  Restored {config.system_agent_path}")
+    else:
+        print("  No saved system agent path, nothing to restore.")
+
+    # Step 3: Remove proxy socket
+    proxy_sock = Path(config.socket_path)
+    if proxy_sock.exists() or proxy_sock.is_symlink():
+        proxy_sock.unlink()
+        print(f"  Removed proxy socket {proxy_sock}")
+
+    # Step 4: Remove config directory
+    print()
+    print("Config:")
+    config_dir = Path(config_path).parent
+    if config_dir.exists():
+        if yes or _ask_yes_no(f"Remove config directory {config_dir}?"):
+            shutil.rmtree(config_dir)
+            print(f"  Removed {config_dir}")
+        else:
+            print(f"  Kept {config_dir}")
+    else:
+        print(f"  {config_dir} does not exist, nothing to remove.")
+
+    print()
+    print("Uninstall complete.")
+    print("To remove the package itself: pipx uninstall keepassxc-ssh-agent")
+
+
+def _cmd_run(config: Config, config_path: Path | None = None) -> None:
     """Start the agent proxy."""
     import logging
     import os
@@ -386,7 +481,7 @@ def _cmd_run(config: Config, config_path=None):
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
 
     if not config.associations:
-        print("ERROR: No KeePassXC association found. Run 'keepassxc-ssh-agent setup' first.")
+        print("ERROR: No KeePassXC association found. Run 'keepassxc-ssh-agent install' first.")
         sys.exit(1)
 
     system_agent = _intercept_ssh_auth_sock(config, config_path)

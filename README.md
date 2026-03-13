@@ -19,15 +19,16 @@ Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this to
 ```
 usage: keepassxc-ssh-agent [-h] [--socket SOCKET] [--config CONFIG]
                            [--timeout TIMEOUT] [-v]
-                           {setup,run,status} ...
+                           {install,run,status,uninstall} ...
 
 SSH IdentityAgent proxy that triggers KeePassXC database unlock via TouchID
 
 positional arguments:
-  {setup,run,status}
-    setup             Associate with KeePassXC (one-time setup)
-    run               Start the SSH agent proxy (default command)
-    status            Check connection status with KeePassXC
+  {install,run,status,uninstall}
+    install             Associate with KeePassXC and install LaunchAgent
+    run                 Start the SSH agent proxy (default command)
+    status              Check connection status with KeePassXC
+    uninstall           Remove LaunchAgent and restore SSH_AUTH_SOCK
 
 options:
   -h, --help          show this help message and exit
@@ -75,7 +76,7 @@ SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
 Make sure KeePassXC is running with browser integration enabled, then:
 
 ```shell
-keepassxc-ssh-agent setup
+keepassxc-ssh-agent install
 ```
 
 This will:
@@ -83,6 +84,17 @@ This will:
 - Request association with KeePassXC (you'll need to approve it in the KeePassXC window)
 - Save the configuration to `~/.keepassxc/ssh-agent.json`
 - Optionally create a LaunchAgent for auto-start
+
+#### Install Options
+
+- `-y` / `--yes` — Auto-accept all prompts (non-interactive, creates the LaunchAgent automatically)
+- `--register-only` — Only register with KeePassXC, skip LaunchAgent creation
+
+Example for scripted/non-interactive install:
+
+```shell
+keepassxc-ssh-agent install -y
+```
 
 ### Manual Setup
 
@@ -116,7 +128,7 @@ cat << 'EOF' > ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 </dict>
 </plist>
 EOF
-launchctl load -w ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 ```
 
 Replace `/path/to/keepassxc-ssh-agent` with the actual path (find it with `which keepassxc-ssh-agent`).
@@ -135,16 +147,32 @@ On shutdown, the proxy restores the original socket. No separate LaunchAgent or 
 
 ## Uninstall
 
-To completely remove keepassxc-ssh-agent:
+The easiest way to uninstall is:
 
-### 1. Stop and remove the LaunchAgent
+```shell
+keepassxc-ssh-agent uninstall
+```
+
+This will stop and remove the LaunchAgent, restore the original SSH_AUTH_SOCK socket, and optionally remove the config directory (`~/.keepassxc/`). Use `-y` to skip confirmation prompts.
+
+Then remove the package itself:
+
+```shell
+pipx uninstall keepassxc-ssh-agent
+```
+
+### Manual Uninstall
+
+If you prefer to uninstall manually:
+
+#### 1. Stop and remove the LaunchAgent
 
 ```shell
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist 2>/dev/null
 rm -f ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 ```
 
-### 2. Restore SSH_AUTH_SOCK
+#### 2. Restore SSH_AUTH_SOCK
 
 If the agent was running, it restores the original socket on shutdown automatically. If the system socket is still symlinked (e.g. after a crash), reboot or restore manually:
 
@@ -156,13 +184,13 @@ rm -f "$SYSTEM_AGENT"
 mv "${SYSTEM_AGENT}.system" "$SYSTEM_AGENT"
 ```
 
-### 3. Remove config and socket
+#### 3. Remove config and socket
 
 ```shell
 rm -rf ~/.keepassxc
 ```
 
-### 4. Uninstall the package
+#### 4. Uninstall the package
 
 ```shell
 pipx uninstall keepassxc-ssh-agent

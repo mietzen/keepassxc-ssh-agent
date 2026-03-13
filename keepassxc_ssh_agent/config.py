@@ -1,11 +1,12 @@
 """Persistent configuration for the KeePassXC SSH agent proxy."""
 
+from __future__ import annotations
+
 import json
 import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 
 DEFAULT_CONFIG_DIR = Path.home() / ".keepassxc"
@@ -28,7 +29,7 @@ class Association:
         return {"id": self.id, "id_key": self.id_key, "key": self.key}
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Association":
+    def from_dict(cls, d: dict) -> Association:
         return cls(id=d["id"], id_key=d["id_key"], key=d["key"])
 
 
@@ -59,7 +60,7 @@ class Config:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Config":
+    def from_dict(cls, d: dict) -> Config:
         associations = {}
         for k, v in d.get("associations", {}).items():
             associations[k] = Association.from_dict(v)
@@ -72,7 +73,7 @@ class Config:
             associations=associations,
         )
 
-    def save(self, path: Optional[Path] = None) -> None:
+    def save(self, path: Path | None = None) -> None:
         path = path or DEFAULT_CONFIG_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -81,7 +82,7 @@ class Config:
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> "Config":
+    def load(cls, path: Path | None = None) -> Config:
         path = path or DEFAULT_CONFIG_PATH
         if not path.exists():
             return cls()

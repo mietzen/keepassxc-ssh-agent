@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 from keepassxc_ssh_agent.__main__ import (
     _ask_yes_no,
     _create_launchagent,
+    _remove_launchagent,
     _get_run_plist,
     _find_agent_bin,
     _intercept_ssh_auth_sock,
@@ -105,6 +106,53 @@ class TestCreateLaunchAgent:
         assert result is False
         output = capsys.readouterr().out
         assert "Warning" in output or "manually" in output
+
+
+class TestRemoveLaunchAgent:
+    def test_removes_plist(self, tmp_path, monkeypatch, capsys):
+        la_dir = tmp_path / "Library" / "LaunchAgents"
+        la_dir.mkdir(parents=True)
+        plist_path = la_dir / f"{LAUNCHAGENT_RUN_LABEL}.plist"
+        plist_path.write_text("<plist/>")
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = _remove_launchagent(LAUNCHAGENT_RUN_LABEL)
+
+        assert result is True
+        assert not plist_path.exists()
+        output = capsys.readouterr().out
+        assert "Stopped" in output
+        assert "Removed" in output
+
+    def test_skips_if_not_exists(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        result = _remove_launchagent(LAUNCHAGENT_RUN_LABEL)
+
+        assert result is False
+        output = capsys.readouterr().out
+        assert "does not exist" in output
+
+    def test_handles_bootout_failure(self, tmp_path, monkeypatch, capsys):
+        """Still removes plist even if launchctl bootout fails."""
+        la_dir = tmp_path / "Library" / "LaunchAgents"
+        la_dir.mkdir(parents=True)
+        plist_path = la_dir / f"{LAUNCHAGENT_RUN_LABEL}.plist"
+        plist_path.write_text("<plist/>")
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        import subprocess
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(
+            1, "launchctl", stderr=b"not running"
+        )):
+            result = _remove_launchagent(LAUNCHAGENT_RUN_LABEL)
+
+        assert result is True
+        assert not plist_path.exists()
 
 
 class TestInterceptSSHAuthSock:

@@ -258,14 +258,13 @@ class TestEncryptDecrypt:
         assert result == message
 
     def test_encrypt_without_server_key_raises(self):
+        import pytest
+
         config = Config()
         client = BrowserClient(config)
         nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-        try:
+        with pytest.raises(RuntimeError):
             client._encrypt({"test": True}, nonce)
-            assert False, "Should have raised RuntimeError"
-        except RuntimeError:
-            pass
 
     def test_decrypt_without_server_key(self):
         config = Config()

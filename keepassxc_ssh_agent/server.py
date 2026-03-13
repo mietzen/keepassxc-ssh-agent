@@ -6,6 +6,8 @@ Forwards requests to the system ssh-agent. When keys are unavailable
 and retries.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import signal
@@ -13,8 +15,8 @@ import socket
 import stat
 import threading
 import time
+import types
 from pathlib import Path
-from typing import Optional
 
 from . import ssh_agent_protocol as proto
 from .browser_client import BrowserClient
@@ -28,7 +30,7 @@ class SSHAgentProxy:
 
     def __init__(self, config: Config, system_agent_path: str = ""):
         self.config = config
-        self._server_socket: Optional[socket.socket] = None
+        self._server_socket: socket.socket | None = None
         self._running = False
         self._system_agent_path = system_agent_path or os.environ.get("SSH_AUTH_SOCK", "")
         # Lock to prevent concurrent unlock attempts
@@ -104,7 +106,7 @@ class SSHAgentProxy:
 
         logger.info("SSH agent proxy stopped")
 
-    def _signal_handler(self, signum: int, frame) -> None:
+    def _signal_handler(self, signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
 
@@ -133,7 +135,7 @@ class SSHAgentProxy:
             except OSError:
                 pass
 
-    def _process_request(self, request: bytes, msg_type: Optional[int]) -> Optional[bytes]:
+    def _process_request(self, request: bytes, msg_type: int | None) -> bytes | None:
         """Process an SSH agent request, potentially triggering unlock."""
         # Forward to system agent
         response = proto.forward_to_agent(self._system_agent_path, request)

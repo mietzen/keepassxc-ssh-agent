@@ -7,10 +7,11 @@ draft-miller-ssh-agent. Messages are framed as:
 The first byte of the message is the message type.
 """
 
-import struct
-import socket
+from __future__ import annotations
+
 import logging
-from typing import Optional
+import socket
+import struct
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ SSH_AGENT_FAILURE = 5
 SSH_AGENT_SUCCESS = 6
 
 
-def read_message(sock: socket.socket) -> Optional[bytes]:
+def read_message(sock: socket.socket) -> bytes | None:
     """Read a length-prefixed SSH agent message from a socket.
 
     Returns the message bytes (without the length prefix), or None on error.
@@ -71,14 +72,14 @@ def make_empty_identities_response() -> bytes:
     return bytes([SSH_AGENT_IDENTITIES_ANSWER]) + struct.pack(">I", 0)
 
 
-def get_message_type(data: bytes) -> Optional[int]:
+def get_message_type(data: bytes) -> int | None:
     """Get the message type byte from a message."""
     if not data:
         return None
     return data[0]
 
 
-def forward_to_agent(agent_sock_path: str, request: bytes) -> Optional[bytes]:
+def forward_to_agent(agent_sock_path: str, request: bytes) -> bytes | None:
     """Forward a message to the system SSH agent and return the response.
 
     Returns None if the agent is not available.
@@ -111,7 +112,7 @@ def is_empty_identities(data: bytes) -> bool:
     return count == 0
 
 
-def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
+def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     """Read exactly n bytes from a socket."""
     buf = bytearray()
     while len(buf) < n:
