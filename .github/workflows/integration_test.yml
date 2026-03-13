@@ -1,0 +1,98 @@
+name: Integration Test (KeePassXC Browser Protocol)
+
+on:
+  schedule:
+    # Run weekly to catch KeePassXC protocol changes
+    - cron: '0 6 * * 1'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  Integration-Test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb dbus-x11
+
+      - name: Install KeePassXC (latest stable)
+        run: |
+          sudo add-apt-repository -y ppa:phoerious/keepassxc
+          sudo apt-get update
+          sudo apt-get install -y keepassxc
+          keepassxc-cli --version
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Create test database
+        run: |
+          echo "testpassword" | keepassxc-cli db-create --set-password /tmp/test.kdbx
+
+      - name: Configure KeePassXC for browser integration
+        run: |
+          mkdir -p ~/.config/keepassxc
+          cat > ~/.config/keepassxc/keepassxc.ini << 'EOF'
+          [General]
+          ConfigVersion=2
+
+          [Browser]
+          Enabled=true
+          EOF
+
+      - name: Start KeePassXC under Xvfb
+        run: |
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 2
+
+          # Start KeePassXC with test database, password via stdin
+          echo "testpassword" | keepassxc --pw-stdin /tmp/test.kdbx &
+          KEEPASSXC_PID=$!
+          echo "KEEPASSXC_PID=$KEEPASSXC_PID" >> $GITHUB_ENV
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+
+          # Wait for the browser socket to appear
+          echo "Waiting for KeePassXC browser socket..."
+          for i in $(seq 1 30); do
+            SOCKET_PATH="${XDG_RUNTIME_DIR}/app/org.keepassxc.KeePassXC/org.keepassxc.KeePassXC.BrowserServer"
+            LEGACY_PATH="${XDG_RUNTIME_DIR}/org.keepassxc.KeePassXC.BrowserServer"
+            if [ -S "$SOCKET_PATH" ] || [ -S "$LEGACY_PATH" ]; then
+              echo "Browser socket found after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          if [ ! -S "$SOCKET_PATH" ] && [ ! -S "$LEGACY_PATH" ]; then
+            echo "ERROR: Browser socket not found after 30s"
+            echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+            ls -la "${XDG_RUNTIME_DIR}/" 2>/dev/null || true
+            ls -la "${XDG_RUNTIME_DIR}/app/org.keepassxc.KeePassXC/" 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Run integration tests
+        env:
+          KEEPASSXC_INTEGRATION_TEST: '1'
+          DISPLAY: ':99'
+        run: |
+          pytest tests/test_integration.py -v
+
+      - name: Stop KeePassXC
+        if: always()
+        run: |
+          kill ${{ env.KEEPASSXC_PID }} 2>/dev/null || true

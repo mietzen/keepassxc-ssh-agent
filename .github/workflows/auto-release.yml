@@ -1,0 +1,32 @@
+name: Auto Release
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  auto-release:
+    if: github.event.pull_request.merged == true && github.event.pull_request.user.login == 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'pip')
+
+    name: Auto Release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Get Version
+        id: get-version
+        run: |
+          LATEST_TAG=$(curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" | jq -r '.name')
+          URL='https://gist.githubusercontent.com/mietzen/cd33efb65f91619201a45ac50dcfc29e/raw/bump-version'
+          echo "version=v$(wget -qO - ${URL} | bash -s ${LATEST_TAG} minor)" >> $GITHUB_OUTPUT
+      - uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID_MERGE }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY_MERGE }}
+      - name: Create Release
+        run: gh release create ${{ steps.get-version.outputs.version }} --generate-notes
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
