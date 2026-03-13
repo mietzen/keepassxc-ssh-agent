@@ -40,7 +40,7 @@ jobs:
 
       - name: Create test database
         run: |
-          echo "testpassword" | keepassxc-cli db-create --set-password /tmp/test.kdbx
+          printf "testpassword\ntestpassword\n" | keepassxc-cli db-create --set-password /tmp/test.kdbx
 
       - name: Configure KeePassXC for browser integration
         run: |
