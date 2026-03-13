@@ -31,6 +31,9 @@ jobs:
   Deploy:
     runs-on: ubuntu-24.04
     needs: Setup
+    permissions:
+      id-token: write
+      contents: read
     steps:
     - uses: actions/checkout@v6
       with:
@@ -49,5 +52,3 @@ jobs:
       run: python -m build --wheel
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@v1.13.0
-      with:
-        password: ${{ secrets.PYPI_API_TOKEN }}
