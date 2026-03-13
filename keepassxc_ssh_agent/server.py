@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 class SSHAgentProxy:
     """SSH agent proxy that triggers KeePassXC unlock on demand."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, system_agent_path: str = ""):
         self.config = config
         self._server_socket: Optional[socket.socket] = None
         self._running = False
-        self._system_agent_path = os.environ.get("SSH_AUTH_SOCK", "")
+        self._system_agent_path = system_agent_path or os.environ.get("SSH_AUTH_SOCK", "")
         # Lock to prevent concurrent unlock attempts
         self._unlock_lock = threading.Lock()
         # Track recent unlock to avoid spamming KeePassXC

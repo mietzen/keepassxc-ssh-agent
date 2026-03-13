@@ -82,7 +82,7 @@ This will:
 - Generate encryption keys for the browser protocol
 - Request association with KeePassXC (you'll need to approve it in the KeePassXC window)
 - Save the configuration to `~/.keepassxc/ssh-agent.json`
-- Automatically configure your `~/.ssh/config` and create a LaunchAgent for auto-start (Optionally)
+- Optionally create a LaunchAgent for auto-start
 
 ### Manual Setup
 
@@ -93,13 +93,13 @@ If you skipped the interactive setup prompts, here are the manual steps:
 Create a LaunchAgent to run `keepassxc-ssh-agent` on login:
 
 ```shell
-cat << 'EOF' > ~/Library/LaunchAgents/com.keepassxc.ssh-agent.plist
+cat << 'EOF' > ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.keepassxc.ssh-agent</string>
+  <string>org.keepassxc.ssh-agent</string>
   <key>ProgramArguments</key>
   <array>
     <string>/path/to/keepassxc-ssh-agent</string>
@@ -116,7 +116,7 @@ cat << 'EOF' > ~/Library/LaunchAgents/com.keepassxc.ssh-agent.plist
 </dict>
 </plist>
 EOF
-launchctl load -w ~/Library/LaunchAgents/com.keepassxc.ssh-agent.plist
+launchctl load -w ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 ```
 
 Replace `/path/to/keepassxc-ssh-agent` with the actual path (find it with `which keepassxc-ssh-agent`).
@@ -127,43 +127,41 @@ Or start manually:
 keepassxc-ssh-agent run
 ```
 
-#### 2. Route SSH Through the Proxy
+#### 2. SSH_AUTH_SOCK Redirection
 
-There are two ways to route SSH through the proxy. Choose one:
+The proxy automatically runs `launchctl setenv SSH_AUTH_SOCK ~/.keepassxc/agent.sock` on startup. This redirects all new processes to use the proxy socket. The proxy saves and forwards to the original system ssh-agent path, so there is no loop.
 
-**Option A: LaunchAgent symlink (recommended, like Strongbox)**
+No separate LaunchAgent or SSH config is needed — the `run` command handles everything.
 
-This symlinks the proxy socket to `$SSH_AUTH_SOCK`, so all SSH clients automatically use it:
+## Uninstall
+
+To completely remove keepassxc-ssh-agent:
+
+### 1. Stop and remove the LaunchAgent
 
 ```shell
-cat << 'EOF' > ~/Library/LaunchAgents/com.keepassxc.SSH_AUTH_SOCK.plist
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.keepassxc.SSH_AUTH_SOCK</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/sh</string>
-    <string>-c</string>
-    <string>/bin/ln -sf $HOME/.keepassxc/agent.sock $SSH_AUTH_SOCK</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-EOF
-launchctl load -w ~/Library/LaunchAgents/com.keepassxc.SSH_AUTH_SOCK.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist 2>/dev/null
+rm -f ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
 ```
 
-**Option B: SSH config**
+### 2. Restore SSH_AUTH_SOCK
 
-Add an `IdentityAgent` directive to `~/.ssh/config`:
+Reboot to restore the original `SSH_AUTH_SOCK`, or restore it immediately:
 
+```shell
+launchctl setenv SSH_AUTH_SOCK "$(cat ~/.keepassxc/ssh-agent.json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("system_agent_path",""))')"
 ```
-Host *
-    IdentityAgent "~/.keepassxc/agent.sock"
+
+### 3. Remove config and socket
+
+```shell
+rm -rf ~/.keepassxc
+```
+
+### 4. Uninstall the package
+
+```shell
+pipx uninstall keepassxc-ssh-agent
 ```
 
 ## Known Limitations

@@ -42,8 +42,6 @@ pytest --cov=keepassxc_ssh_agent
 # Lint
 ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent
 
-# Run integration tests (requires running KeePassXC with browser integration)
-KEEPASSXC_INTEGRATION_TEST=1 pytest tests/test_integration.py -v
 ```
 
 ## Conventions
@@ -53,7 +51,7 @@ KEEPASSXC_INTEGRATION_TEST=1 pytest tests/test_integration.py -v
 - Config files use 0600 permissions (owner-only)
 - Tests use `short_tmp` fixture for Unix socket paths (macOS `tmp_path` is too long for AF_UNIX)
 - Integration tests are skipped unless `KEEPASSXC_INTEGRATION_TEST=1` is set
-- LaunchAgent labels: `com.keepassxc.ssh-agent` (run agent), `com.keepassxc.SSH_AUTH_SOCK` (symlink socket)
+- LaunchAgent labels: `org.keepassxc.ssh-agent` (run agent), `org.keepassxc.SSH_AUTH_SOCK` (setenv socket)
 
 ## Known Limitations
 
@@ -64,6 +62,5 @@ KEEPASSXC_INTEGRATION_TEST=1 pytest tests/test_integration.py -v
 ## CI
 
 - `lint_and_test.yml` - Unit tests + ruff lint across Python 3.10-3.14
-- `integration_test.yml` - Weekly test against latest stable KeePassXC (Xvfb + PPA)
 - `pypi.yml` - Build & publish on release
 - `dependabot.yml` - Weekly dependency updates

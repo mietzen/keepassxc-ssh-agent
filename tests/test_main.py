@@ -1,18 +1,16 @@
 """Tests for CLI entry point."""
 
-import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from keepassxc_ssh_agent.__main__ import (
     _ask_yes_no,
-    _setup_ssh_config,
     _create_launchagent,
     _get_run_plist,
-    _get_sock_plist,
     _find_agent_bin,
+    _resolve_system_agent,
+    _setenv_ssh_auth_sock,
     LAUNCHAGENT_RUN_LABEL,
-    LAUNCHAGENT_SOCK_LABEL,
 )
 
 
@@ -46,49 +44,6 @@ class TestAskYesNo:
             assert _ask_yes_no("test?", default=True) is True
 
 
-class TestSetupSSHConfig:
-    def test_creates_ssh_config(self, tmp_path, monkeypatch):
-        ssh_dir = tmp_path / ".ssh"
-        ssh_config = ssh_dir / "config"
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        _setup_ssh_config("/tmp/agent.sock")
-
-        assert ssh_config.exists()
-        content = ssh_config.read_text()
-        assert "Host *" in content
-        assert 'IdentityAgent "/tmp/agent.sock"' in content
-
-    def test_appends_to_existing_config(self, tmp_path, monkeypatch):
-        ssh_dir = tmp_path / ".ssh"
-        ssh_dir.mkdir()
-        ssh_config = ssh_dir / "config"
-        ssh_config.write_text("Host example.com\n    User admin\n")
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        _setup_ssh_config("/tmp/agent.sock")
-
-        content = ssh_config.read_text()
-        assert "Host example.com" in content
-        assert "Host *" in content
-        assert 'IdentityAgent "/tmp/agent.sock"' in content
-
-    def test_skips_if_already_configured(self, tmp_path, monkeypatch, capsys):
-        ssh_dir = tmp_path / ".ssh"
-        ssh_dir.mkdir()
-        ssh_config = ssh_dir / "config"
-        ssh_config.write_text('Host *\n    IdentityAgent "/tmp/agent.sock"\n')
-
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        _setup_ssh_config("/tmp/agent.sock")
-
-        output = capsys.readouterr().out
-        assert "already contains" in output
-
-
 class TestPlistGeneration:
     def test_run_plist_with_binary(self):
         plist = _get_run_plist("/usr/local/bin/keepassxc-ssh-agent")
@@ -103,12 +58,6 @@ class TestPlistGeneration:
         assert sys.executable in plist
         assert "keepassxc_ssh_agent" in plist
         assert "<string>-m</string>" in plist
-
-    def test_sock_plist(self):
-        plist = _get_sock_plist("/home/user/.keepassxc/agent.sock")
-        assert LAUNCHAGENT_SOCK_LABEL in plist
-        assert "ln -sf /home/user/.keepassxc/agent.sock" in plist
-        assert "$SSH_AUTH_SOCK" in plist
 
 
 class TestCreateLaunchAgent:
@@ -127,22 +76,6 @@ class TestCreateLaunchAgent:
         assert plist_path.exists()
         content = plist_path.read_text()
         assert LAUNCHAGENT_RUN_LABEL in content
-
-    def test_creates_sock_plist(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            result = _create_launchagent(
-                LAUNCHAGENT_SOCK_LABEL,
-                _get_sock_plist("/tmp/agent.sock"),
-            )
-
-        assert result is True
-        plist_path = tmp_path / "Library" / "LaunchAgents" / f"{LAUNCHAGENT_SOCK_LABEL}.plist"
-        assert plist_path.exists()
-        content = plist_path.read_text()
-        assert "ln -sf" in content
 
     def test_skips_if_exists(self, tmp_path, monkeypatch, capsys):
         la_dir = tmp_path / "Library" / "LaunchAgents"
@@ -170,6 +103,71 @@ class TestCreateLaunchAgent:
         assert result is False
         output = capsys.readouterr().out
         assert "Warning" in output or "manually" in output
+
+
+class TestResolveSystemAgent:
+    def test_uses_ssh_auth_sock_when_not_our_socket(self, tmp_path, monkeypatch):
+        """When SSH_AUTH_SOCK points to the real agent, use and save it."""
+        from keepassxc_ssh_agent.config import Config
+
+        config = Config(socket_path=str(tmp_path / "proxy.sock"))
+        config_path = tmp_path / "config.json"
+
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/com.apple.launchd.XXX/Listeners")
+
+        result = _resolve_system_agent(config, config_path)
+        assert result == "/tmp/com.apple.launchd.XXX/Listeners"
+        assert config.system_agent_path == "/tmp/com.apple.launchd.XXX/Listeners"
+
+    def test_uses_saved_path_when_ssh_auth_sock_is_our_socket(self, tmp_path, monkeypatch):
+        """When SSH_AUTH_SOCK points to our socket, fall back to saved path."""
+        from keepassxc_ssh_agent.config import Config
+
+        proxy_sock = str(tmp_path / "proxy.sock")
+        config = Config(
+            socket_path=proxy_sock,
+            system_agent_path="/tmp/com.apple.launchd.XXX/Listeners",
+        )
+        config_path = tmp_path / "config.json"
+
+        monkeypatch.setenv("SSH_AUTH_SOCK", proxy_sock)
+
+        result = _resolve_system_agent(config, config_path)
+        assert result == "/tmp/com.apple.launchd.XXX/Listeners"
+
+    def test_returns_empty_when_no_agent_available(self, tmp_path, monkeypatch):
+        """When SSH_AUTH_SOCK is unset and no saved path, return empty."""
+        from keepassxc_ssh_agent.config import Config
+
+        config = Config(socket_path=str(tmp_path / "proxy.sock"))
+        config_path = tmp_path / "config.json"
+
+        monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+
+        result = _resolve_system_agent(config, config_path)
+        assert result == ""
+
+
+class TestSetenvSSHAuthSock:
+    def test_calls_launchctl_setenv(self):
+        with patch("subprocess.run") as mock_run:
+            _setenv_ssh_auth_sock("/tmp/proxy.sock")
+            mock_run.assert_called_once_with(
+                ["launchctl", "setenv", "SSH_AUTH_SOCK", "/tmp/proxy.sock"],
+                check=True,
+                capture_output=True,
+            )
+
+    def test_handles_failure_gracefully(self):
+        import subprocess
+        with patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "launchctl")):
+            # Should not raise
+            _setenv_ssh_auth_sock("/tmp/proxy.sock")
+
+    def test_handles_missing_launchctl(self):
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            # Should not raise (e.g. on Linux)
+            _setenv_ssh_auth_sock("/tmp/proxy.sock")
 
 
 class TestFindAgentBin:

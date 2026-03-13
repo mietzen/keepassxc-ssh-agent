@@ -81,7 +81,7 @@ def main():
     elif command == "status":
         _cmd_status(config)
     elif command == "run":
-        _cmd_run(config)
+        _cmd_run(config, Path(args.config))
 
 
 def _ask_yes_no(prompt: str, default: bool = True) -> bool:
@@ -97,32 +97,7 @@ def _ask_yes_no(prompt: str, default: bool = True) -> bool:
     return answer in ("y", "yes")
 
 
-def _setup_ssh_config(socket_path: str) -> None:
-    """Add IdentityAgent to ~/.ssh/config if not already present."""
-    from pathlib import Path
-
-    ssh_config = Path.home() / ".ssh" / "config"
-    identity_line = f'    IdentityAgent "{socket_path}"'
-
-    # Check if already configured
-    if ssh_config.exists():
-        content = ssh_config.read_text()
-        if socket_path in content:
-            print("  ~/.ssh/config already contains IdentityAgent entry, skipping.")
-            return
-
-    # Build the block to append
-    block = f"\nHost *\n{identity_line}\n"
-
-    ssh_config.parent.mkdir(parents=True, exist_ok=True)
-    with open(ssh_config, "a") as f:
-        f.write(block)
-
-    print(f"  Added IdentityAgent to {ssh_config}")
-
-
-LAUNCHAGENT_RUN_LABEL = "com.keepassxc.ssh-agent"
-LAUNCHAGENT_SOCK_LABEL = "com.keepassxc.SSH_AUTH_SOCK"
+LAUNCHAGENT_RUN_LABEL = "org.keepassxc.ssh-agent"
 
 
 def _find_agent_bin() -> str:
@@ -169,28 +144,6 @@ def _get_run_plist(agent_bin: str) -> str:
 """
 
 
-def _get_sock_plist(socket_path: str) -> str:
-    """LaunchAgent plist that symlinks the proxy socket to $SSH_AUTH_SOCK."""
-    return f"""\
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{LAUNCHAGENT_SOCK_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/sh</string>
-    <string>-c</string>
-    <string>/bin/ln -sf {socket_path} $SSH_AUTH_SOCK</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-"""
-
-
 def _create_launchagent(label: str, content: str) -> bool:
     """Create and load a single LaunchAgent plist. Returns True on success."""
     import subprocess
@@ -220,19 +173,6 @@ def _create_launchagent(label: str, content: str) -> bool:
         return False
 
 
-def _setup_launchagents(socket_path: str) -> None:
-    """Create and load LaunchAgent plists for auto-start."""
-    agent_bin = _find_agent_bin()
-
-    print()
-    print("  Creating LaunchAgent to run keepassxc-ssh-agent on login...")
-    _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
-
-    print()
-    print("  Creating LaunchAgent to symlink proxy socket to $SSH_AUTH_SOCK...")
-    _create_launchagent(LAUNCHAGENT_SOCK_LABEL, _get_sock_plist(socket_path))
-
-
 def _cmd_setup(config: Config, config_path):
     """Run the setup/association flow."""
     import os
@@ -259,35 +199,14 @@ def _cmd_setup(config: Config, config_path):
         print()
         print("Setup complete!")
 
-        # SSH routing configuration
-        print()
-        print("How should SSH find the proxy socket?")
-        print("  1) ~/.ssh/config  - Add IdentityAgent directive (per-user SSH config)")
-        print("  2) LaunchAgent    - Symlink proxy socket to $SSH_AUTH_SOCK (system-wide, like Strongbox)")
-        print("  3) Skip           - Configure manually later")
-        print()
-        try:
-            choice = input("Choose [1/2/3] (default: 2): ").strip()
-        except (EOFError, KeyboardInterrupt):
-            choice = "2"
-            print()
-
-        if choice == "1":
-            _setup_ssh_config(config.socket_path)
-        elif choice in ("2", ""):
-            _create_launchagent(
-                LAUNCHAGENT_SOCK_LABEL,
-                _get_sock_plist(config.socket_path),
-            )
-        else:
-            print()
-            print("  Skipped. See README.md for manual configuration options.")
-
         # Auto-start agent on login
         print()
         if _ask_yes_no("Create a LaunchAgent to start keepassxc-ssh-agent on login?"):
             agent_bin = _find_agent_bin()
             _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
+            print()
+            print("  The agent will set SSH_AUTH_SOCK automatically on startup")
+            print("  via 'launchctl setenv' so all new processes use the proxy.")
         else:
             print()
             print("  To start manually: keepassxc-ssh-agent run")
@@ -352,14 +271,65 @@ def _cmd_status(config: Config):
         print("NOT AVAILABLE (is KeePassXC running with browser integration?)")
 
 
-def _cmd_run(config: Config):
-    """Start the agent proxy."""
+def _resolve_system_agent(config: Config, config_path) -> str:
+    """Resolve the real system ssh-agent socket path, avoiding our own socket.
+
+    On first boot, SSH_AUTH_SOCK points to the real agent (e.g.
+    /tmp/com.apple.launchd.XXX/Listeners). We save this path to config.
+    On restart (KeepAlive), SSH_AUTH_SOCK may point to our own socket
+    (if launchctl setenv was used), so we fall back to the saved path.
+    """
     import os
+    from pathlib import Path
+
+    ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
+    our_socket = str(Path(config.socket_path).resolve())
+
+    if ssh_auth_sock:
+        resolved = str(Path(ssh_auth_sock).resolve())
+        if resolved != our_socket:
+            # SSH_AUTH_SOCK points to the real agent - save it
+            if config.system_agent_path != ssh_auth_sock:
+                config.system_agent_path = ssh_auth_sock
+                config.save(config_path)
+            return ssh_auth_sock
+
+    # SSH_AUTH_SOCK points to our socket or is unset - use saved path
+    if config.system_agent_path:
+        return config.system_agent_path
+
+    return ""
+
+
+def _setenv_ssh_auth_sock(socket_path: str) -> None:
+    """Set SSH_AUTH_SOCK for all new launchd-spawned processes."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["launchctl", "setenv", "SSH_AUTH_SOCK", socket_path],
+            check=True,
+            capture_output=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass  # Non-fatal: works without setenv (e.g. on Linux or in tests)
+
+
+def _cmd_run(config: Config, config_path=None):
+    """Start the agent proxy."""
+    import logging
 
     from .server import SSHAgentProxy
 
-    if not os.environ.get("SSH_AUTH_SOCK"):
-        print("ERROR: SSH_AUTH_SOCK is not set. Cannot forward to system ssh-agent.")
+    logger = logging.getLogger(__name__)
+
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    system_agent = _resolve_system_agent(config, config_path)
+    if not system_agent:
+        print("ERROR: Cannot determine system ssh-agent path.")
+        print("SSH_AUTH_SOCK is not set and no saved agent path in config.")
         print("Start ssh-agent first, e.g.: eval $(ssh-agent)")
         sys.exit(1)
 
@@ -367,7 +337,11 @@ def _cmd_run(config: Config):
         print("ERROR: No KeePassXC association found. Run 'keepassxc-ssh-agent setup' first.")
         sys.exit(1)
 
-    proxy = SSHAgentProxy(config)
+    # Redirect SSH_AUTH_SOCK for all new processes to our proxy socket
+    _setenv_ssh_auth_sock(config.socket_path)
+    logger.info("Set SSH_AUTH_SOCK=%s via launchctl setenv", config.socket_path)
+
+    proxy = SSHAgentProxy(config, system_agent_path=system_agent)
     try:
         proxy.start()
     except KeyboardInterrupt:

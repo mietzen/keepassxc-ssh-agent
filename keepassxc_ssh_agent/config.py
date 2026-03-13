@@ -41,17 +41,22 @@ class Config:
     # NaCl keypair for browser protocol communication (base64-encoded)
     client_public_key: str = ""
     client_secret_key: str = ""
+    # Path to the real system ssh-agent socket (saved on first run)
+    system_agent_path: str = ""
     # Per-database associations (keyed by database hash)
     associations: dict[str, Association] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "socket_path": self.socket_path,
             "unlock_timeout": self.unlock_timeout,
             "client_public_key": self.client_public_key,
             "client_secret_key": self.client_secret_key,
             "associations": {k: v.to_dict() for k, v in self.associations.items()},
         }
+        if self.system_agent_path:
+            d["system_agent_path"] = self.system_agent_path
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
@@ -63,6 +68,7 @@ class Config:
             unlock_timeout=d.get("unlock_timeout", DEFAULT_UNLOCK_TIMEOUT),
             client_public_key=d.get("client_public_key", ""),
             client_secret_key=d.get("client_secret_key", ""),
+            system_agent_path=d.get("system_agent_path", ""),
             associations=associations,
         )
 
