@@ -59,9 +59,16 @@ ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent
 - If DB is unlocked but ssh-agent is cleared (`ssh-add -D`), keys won't reload without lock/unlock cycle
 - `triggerUnlock` only works for the active database tab in KeePassXC
 
+## Homebrew
+
+- Tap repo: `mietzen/homebrew-tap` (access locally via `cd $(brew --repository mietzen/homebrew-tap)`)
+- Formula: `Formula/keepassxc-ssh-agent.rb` — uses `Language::Python::Virtualenv`, depends on python@3.13, libsodium
+- Service managed via `brew services` (not the tool's own LaunchAgent when installed via Homebrew)
+- Formula auto-updated on new PyPI releases via `repository_dispatch` from `pypi.yml`
+
 ## CI
 
 - `lint_and_test.yml` - Unit tests + ruff lint across Python 3.10-3.14
-- `pypi.yml` - Build & publish on release
+- `pypi.yml` - Build & publish on release, then dispatch to homebrew-tap to update the formula
 - `auto-release.yml` - Auto-create patch release on dependabot merge
 - `auto-merge-dependabot.yml` - Auto-merge dependabot PRs
