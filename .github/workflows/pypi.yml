@@ -52,6 +52,25 @@ jobs:
     - name: Build package
       env:
         SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.Setup.outputs.version }}
-      run: python -m build --wheel
+      run: python -m build
     - name: Publish package
       uses: pypa/gh-action-pypi-publish@v1.13.0
+
+  Notify-Homebrew:
+    runs-on: ubuntu-24.04
+    needs: [Setup, Deploy]
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: generate-token
+        with:
+          app-id: ${{ secrets.APP_ID_MERGE }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY_MERGE }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-tap
+      - name: Trigger Homebrew formula update
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          gh api repos/${{ github.repository_owner }}/homebrew-tap/dispatches \
+            -f event_type=update-formula \
+            -f "client_payload[version]=${{ needs.Setup.outputs.version }}"

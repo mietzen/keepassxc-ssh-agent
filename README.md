@@ -73,6 +73,21 @@ On shutdown, the proxy restores the original socket. No separate LaunchAgent or 
 
 Make sure KeePassXC is running and unlocked with browser integration enabled, then:
 
+### Homebrew (recommended)
+
+```shell
+brew install mietzen/tap/keepassxc-ssh-agent
+keepassxc-ssh-agent install --register-only
+brew services start keepassxc-ssh-agent
+```
+
+This will:
+- Install `keepassxc-ssh-agent` and its dependencies
+- Register with KeePassXC (you'll need to approve the association in the unlocked KeePassXC window)
+- Start the background service via Homebrew (auto-starts on login)
+
+### pipx
+
 ```shell
 pipx install keepassxc-ssh-agent
 keepassxc-ssh-agent install -y
@@ -146,6 +161,16 @@ keepassxc-ssh-agent run
 ```
 
 ## Uninstall
+
+### Homebrew
+
+```shell
+brew services stop keepassxc-ssh-agent
+brew uninstall keepassxc-ssh-agent
+rm -rf ~/.keepassxc  # Remove config (optional)
+```
+
+### pipx
 
 ```shell
 keepassxc-ssh-agent uninstall -y
