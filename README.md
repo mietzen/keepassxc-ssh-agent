@@ -9,10 +9,11 @@ Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this to
 - **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
 - **Python >= 3.10**
 - **KeePassXC** with:
-  - **Browser Integration** enabled (Settings > Browser Integration > Enable browser integration)
-  - **SSH Agent Integration** enabled (Settings > SSH Agent > Enable SSH Agent integration)
+  - Browser Integration enabled (Settings > Browser Integration > Enable browser integration)
+    
+  - SSH Agent Integration enabled (Settings > SSH Agent > Enable SSH Agent integration)
   - SSH keys configured with "Add key to agent when database is opened/unlocked"
-- A running **ssh-agent** (`SSH_AUTH_SOCK` must be set)
+- A running ssh-agent (`SSH_AUTH_SOCK` must be set)
 
 ## Usage
 
