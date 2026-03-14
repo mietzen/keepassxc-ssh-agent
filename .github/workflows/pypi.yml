@@ -72,5 +72,5 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
           gh api repos/${{ github.repository_owner }}/homebrew-tap/dispatches \
-            -f event_type=update-formula \
+            -f event_type=update-keepassxc-ssh-agent \
             -f "client_payload[version]=${{ needs.Setup.outputs.version }}"
