@@ -4,16 +4,19 @@
 
 Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this tool sits between your SSH client and the system `ssh-agent`. When SSH requests a key that isn't loaded (because the KeePassXC database is locked), the proxy triggers KeePassXC's unlock dialog. After you authenticate with TouchID, KeePassXC pushes the keys to `ssh-agent`, and the SSH operation continues seamlessly.
 
+![Functionality demonstration](assets/demo.gif)
+
 ## Prerequisites
 
 - **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
 - **Python >= 3.10**
 - **KeePassXC** with:
   - Browser Integration enabled (Settings > Browser Integration > Enable browser integration)
-    
+    ![KeePassXC Browser Integration Settings screenshot](assets/settings-browser-integration.png)
   - SSH Agent Integration enabled (Settings > SSH Agent > Enable SSH Agent integration)
+    ![SSH-Agent settings screenshot](assets/settings-ssh-agent.png)
   - SSH keys configured with "Add key to agent when database is opened/unlocked"
-- A running ssh-agent (`SSH_AUTH_SOCK` must be set)
+    ![SSH-Key entry settings screenshot](assets/ssh-key-entry-settings.png)
 
 ## Usage
 
