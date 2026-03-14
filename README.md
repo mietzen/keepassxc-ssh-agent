@@ -87,7 +87,7 @@ This will:
 - Register with KeePassXC (you'll need to approve the association in the unlocked KeePassXC window)
 - Start the background service via Homebrew (auto-starts on login)
 
-### pipx
+### pipx - Automatic Install
 
 See **[pipx installation guide](https://github.com/pypa/pipx#install-pipx)** on how to setup pipx.
 
@@ -104,7 +104,7 @@ This will:
 
 The `-y` flag auto-accepts all prompts. Without it, you'll be asked interactively whether to create the LaunchAgent.
 
-### Manual Install
+### pipx - Manual Install
 
 If you want more control over the installation, you can split it into steps:
 
