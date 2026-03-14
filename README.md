@@ -8,7 +8,6 @@ Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this to
 
 - **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
 - **Python >= 3.10**
-- **[pipx](https://github.com/pypa/pipx)** — for isolated package installation (see [pipx installation guide](https://github.com/pypa/pipx#install-pipx))
 - **KeePassXC** with:
   - **Browser Integration** enabled (Settings > Browser Integration > Enable browser integration)
   - **SSH Agent Integration** enabled (Settings > SSH Agent > Enable SSH Agent integration)
@@ -75,6 +74,8 @@ Make sure KeePassXC is running and unlocked with browser integration enabled, th
 
 ### Homebrew (recommended)
 
+See **[homebrew homepage](https://brew.sh/)** on how to setup homebrew.
+
 ```shell
 brew install mietzen/tap/keepassxc-ssh-agent
 keepassxc-ssh-agent install --register-only
@@ -87,6 +88,8 @@ This will:
 - Start the background service via Homebrew (auto-starts on login)
 
 ### pipx
+
+See **[pipx installation guide](https://github.com/pypa/pipx#install-pipx)** on how to setup pipx.
 
 ```shell
 pipx install keepassxc-ssh-agent
