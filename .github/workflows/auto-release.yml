@@ -27,7 +27,7 @@ jobs:
           MINOR=$((MINOR + 1))
           PATCH=0
           echo "version=v${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: generate-token
         with:
           app-id: ${{ secrets.APP_ID_MERGE }}
