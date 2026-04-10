@@ -54,7 +54,7 @@ jobs:
         SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.Setup.outputs.version }}
       run: python -m build
     - name: Publish package
-      uses: pypa/gh-action-pypi-publish@v1.13.0
+      uses: pypa/gh-action-pypi-publish@v1.14.0
 
   Notify-Homebrew:
     runs-on: ubuntu-24.04
