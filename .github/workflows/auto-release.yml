@@ -4,6 +4,9 @@ on:
     types:
       - closed
 
+permissions:
+  contents: read
+
 jobs:
   auto-release:
     if: github.event.pull_request.merged == true && github.event.pull_request.user.login == 'dependabot[bot]' && contains(github.event.pull_request.labels.*.name, 'pip')
