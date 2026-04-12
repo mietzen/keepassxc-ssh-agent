@@ -19,8 +19,8 @@ import types
 from pathlib import Path
 
 from . import ssh_agent_protocol as proto
-from .browser_client import BrowserClient
 from .config import Config
+from keepassxc_browser_api import BrowserClient, BrowserConfig
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 class SSHAgentProxy:
     """SSH agent proxy that triggers KeePassXC unlock on demand."""
 
-    def __init__(self, config: Config, system_agent_path: str = ""):
+    def __init__(self, config: Config, browser_config: BrowserConfig, system_agent_path: str = ""):
         self.config = config
+        self.browser_config = browser_config
         self._server_socket: socket.socket | None = None
         self._running = False
         self._system_agent_path = system_agent_path or os.environ.get("SSH_AUTH_SOCK", "")
@@ -185,7 +186,7 @@ class SSHAgentProxy:
             self._last_unlock_attempt = now
 
             logger.info("Triggering KeePassXC database unlock...")
-            client = BrowserClient(self.config)
+            client = BrowserClient(self.browser_config)
             result = client.ensure_unlocked()
 
             if result:

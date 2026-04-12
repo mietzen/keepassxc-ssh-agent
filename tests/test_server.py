@@ -8,8 +8,17 @@ import time
 from unittest.mock import patch, MagicMock
 
 from keepassxc_ssh_agent import ssh_agent_protocol as proto
-from keepassxc_ssh_agent.config import Association, Config
+from keepassxc_ssh_agent.config import Config
 from keepassxc_ssh_agent.server import SSHAgentProxy
+from keepassxc_browser_api import BrowserConfig
+from keepassxc_browser_api.config import Association
+
+
+def _make_browser_config() -> BrowserConfig:
+    """Return a BrowserConfig with a fake association for testing."""
+    bc = BrowserConfig()
+    bc.associations["hash"] = Association(id="id", id_key="ipk", key="isk")
+    return bc
 
 
 def _make_mock_agent(sock_path: str, responses: dict):
@@ -66,9 +75,9 @@ class TestSSHAgentProxy:
 
         config = Config(
             socket_path=proxy_sock,
-            associations={"hash": Association("id", "ipk", "isk")},
         )
-        proxy = SSHAgentProxy(config)
+        browser_config = _make_browser_config()
+        proxy = SSHAgentProxy(config, browser_config)
 
         # Start proxy in a thread
         proxy_thread = threading.Thread(target=proxy.start, daemon=True)
@@ -104,9 +113,9 @@ class TestSSHAgentProxy:
 
         config = Config(
             socket_path=proxy_sock,
-            associations={"hash": Association("id", "ipk", "isk")},
         )
-        proxy = SSHAgentProxy(config)
+        browser_config = _make_browser_config()
+        proxy = SSHAgentProxy(config, browser_config)
         proxy_thread = threading.Thread(target=proxy.start, daemon=True)
         proxy_thread.start()
         time.sleep(0.3)
@@ -139,9 +148,9 @@ class TestSSHAgentProxy:
 
         config = Config(
             socket_path=proxy_sock,
-            associations={"hash": Association("id", "ipk", "isk")},
         )
-        proxy = SSHAgentProxy(config)
+        browser_config = _make_browser_config()
+        proxy = SSHAgentProxy(config, browser_config)
         proxy_thread = threading.Thread(target=proxy.start, daemon=True)
         proxy_thread.start()
         time.sleep(0.3)
@@ -159,9 +168,9 @@ class TestUnlockRateLimit:
 
         config = Config(
             socket_path="/tmp/test-proxy.sock",
-            associations={"hash": Association("id", "ipk", "isk")},
         )
-        proxy = SSHAgentProxy(config)
+        browser_config = _make_browser_config()
+        proxy = SSHAgentProxy(config, browser_config)
         proxy._unlock_cooldown = 1.0
 
         # Mock BrowserClient.ensure_unlocked to return False (no KeePassXC)

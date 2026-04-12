@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .config import Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH
+from keepassxc_browser_api import BrowserClient, BrowserConfig
 
 
 def main() -> None:
@@ -99,18 +100,20 @@ def main() -> None:
 
     config = Config.load(Path(args.config))
     config.socket_path = args.socket
-    config.unlock_timeout = args.timeout
+
+    browser_config = BrowserConfig.load(Path(config.browser_api_config_path))
+    browser_config.unlock_timeout = args.timeout
 
     command = args.command or "run"
 
     if command == "install":
-        _cmd_install(config, Path(args.config), yes=args.yes, register_only=args.register_only)
+        _cmd_install(config, Path(args.config), browser_config, yes=args.yes, register_only=args.register_only)
     elif command == "status":
-        _cmd_status(config)
+        _cmd_status(config, browser_config)
     elif command == "uninstall":
         _cmd_uninstall(config, Path(args.config), yes=args.yes)
     elif command == "run":
-        _cmd_run(config, Path(args.config))
+        _cmd_run(config, Path(args.config), browser_config)
 
 
 def _ask_yes_no(prompt: str, default: bool = True) -> bool:
@@ -239,11 +242,9 @@ def _remove_launchagent(label: str) -> bool:
     return True
 
 
-def _cmd_install(config: Config, config_path: Path, *, yes: bool = False, register_only: bool = False) -> None:
+def _cmd_install(config: Config, config_path: Path, browser_config: BrowserConfig, *, yes: bool = False, register_only: bool = False) -> None:
     """Run the install/association flow."""
     import os
-
-    from .browser_client import BrowserClient
 
     if not os.environ.get("SSH_AUTH_SOCK"):
         print("WARNING: SSH_AUTH_SOCK is not set. The proxy needs a running ssh-agent to forward to.")
@@ -259,9 +260,10 @@ def _cmd_install(config: Config, config_path: Path, *, yes: bool = False, regist
     print()
     print("Connecting to KeePassXC...")
 
-    client = BrowserClient(config)
+    client = BrowserClient(browser_config)
     if client.setup():
         config.save(config_path)
+        browser_config.save(Path(config.browser_api_config_path))
         print()
         print("Registration complete!")
 
@@ -287,11 +289,9 @@ def _cmd_install(config: Config, config_path: Path, *, yes: bool = False, regist
         sys.exit(1)
 
 
-def _cmd_status(config: Config) -> None:
+def _cmd_status(config: Config, browser_config: BrowserConfig) -> None:
     """Check connection status."""
     import os
-
-    from .browser_client import BrowserClient
 
     print("KeePassXC SSH Agent - Status")
     print("=" * 40)
@@ -315,18 +315,18 @@ def _cmd_status(config: Config) -> None:
 
     # Check KeePassXC connection
     print("  KeePassXC: ", end="")
-    client = BrowserClient(config)
+    client = BrowserClient(browser_config)
     if client.connect():
         if client.change_public_keys():
             # Test any stored association
             found = False
-            for _hash, assoc in config.associations.items():
+            for _hash, assoc in browser_config.associations.items():
                 if client.test_associate(assoc):
                     print(f"CONNECTED (association: {assoc.id})")
                     found = True
                     break
             if not found:
-                if config.associations:
+                if browser_config.associations:
                     print("CONNECTED but associations expired (run 'install' again)")
                 else:
                     print("CONNECTED but not associated (run 'install')")
@@ -509,7 +509,7 @@ def _cmd_uninstall(config: Config, config_path: Path, *, yes: bool = False) -> N
     print("To remove the package itself: pipx uninstall keepassxc-ssh-agent")
 
 
-def _cmd_run(config: Config, config_path: Path | None = None) -> None:
+def _cmd_run(config: Config, config_path: Path | None = None, browser_config: BrowserConfig | None = None) -> None:
     """Start the agent proxy."""
     import logging
     import os
@@ -521,9 +521,12 @@ def _cmd_run(config: Config, config_path: Path | None = None) -> None:
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
 
+    if browser_config is None:
+        browser_config = BrowserConfig.load(Path(config.browser_api_config_path))
+
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK", "")
 
-    if not config.associations:
+    if not browser_config.associations:
         print("ERROR: No KeePassXC association found. Run 'keepassxc-ssh-agent install' first.")
         sys.exit(1)
 
@@ -536,7 +539,7 @@ def _cmd_run(config: Config, config_path: Path | None = None) -> None:
 
     logger.info("Intercepted SSH_AUTH_SOCK=%s, forwarding to %s", ssh_auth_sock, system_agent)
 
-    proxy = SSHAgentProxy(config, system_agent_path=system_agent)
+    proxy = SSHAgentProxy(config, browser_config, system_agent_path=system_agent)
     try:
         proxy.start()
     except KeyboardInterrupt:
