@@ -103,7 +103,8 @@ keepassxc-ssh-agent install -y
 This will:
 - Generate encryption keys for the browser protocol
 - Request association with KeePassXC (you'll need to approve it in the KeePassXC window)
-- Save the configuration to `~/.keepassxc/ssh-agent.json`
+- Save the agent configuration to `~/.keepassxc/ssh-agent.json`
+- Save the browser API credentials to `~/.keepassxc/browser-api.json` (shared with `keepassxc-cli` if installed)
 - Create a LaunchAgent for auto-start on login
 
 The `-y` flag auto-accepts all prompts. Without it, you'll be asked interactively whether to create the LaunchAgent.
@@ -226,6 +227,8 @@ pipx uninstall keepassxc-ssh-agent
 - **Multiple databases**: `triggerUnlock` only works for the currently active database tab in KeePassXC.
 
 ## Development
+
+This package depends on [`keepassxc-browser-api`](https://github.com/mietzen/keepassxc-browser-api), which handles the KeePassXC browser extension protocol. The browser API credentials are stored in `~/.keepassxc/browser-api.json` and are shared with `keepassxc-cli` if installed.
 
 ```shell
 # Install with dev dependencies
