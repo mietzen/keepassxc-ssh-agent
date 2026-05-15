@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
 from pathlib import Path
 
-from .config import Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH
 from keepassxc_browser_api import BrowserClient, BrowserConfig
 from keepassxc_browser_api.exceptions import ConnectionError
+
+from .config import Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +146,6 @@ LAUNCHAGENT_RUN_LABEL = "org.keepassxc.ssh-agent"
 
 def _find_agent_bin() -> str:
     """Find the keepassxc-ssh-agent binary path."""
-    import shutil
-
     path = shutil.which("keepassxc-ssh-agent")
     if path:
         return path
@@ -488,8 +488,6 @@ def _restore_ssh_auth_sock(ssh_auth_sock: str, proxy_socket_path: str = "") -> N
 
 def _cmd_uninstall(config: Config, config_path: Path, *, yes: bool = False) -> None:
     """Remove LaunchAgent, restore SSH_AUTH_SOCK, and optionally clean up config."""
-    import shutil
-
     print("KeePassXC SSH Agent - Uninstall")
     print("=" * 40)
     print()
