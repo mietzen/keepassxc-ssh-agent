@@ -6,6 +6,8 @@ Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this to
 
 ![Functionality demonstration](assets/demo.gif)
 
+KeePassXC SSH Agent based on [KeePassXC Browser API](https://github.com/mietzen/keepassxc-browser-api).
+
 ## Prerequisites
 
 - **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
@@ -231,8 +233,15 @@ pipx uninstall keepassxc-ssh-agent
 This package depends on [`keepassxc-browser-api`](https://github.com/mietzen/keepassxc-browser-api), which handles the KeePassXC browser extension protocol. The browser API credentials are stored in `~/.keepassxc/browser-api.json` and are shared with `keepassxc-cli` if installed.
 
 ```shell
+git clone https://github.com/mietzen/keepassxc-ssh-agent
+git clone https://github.com/mietzen/keepassxc-browser-api
+cd keepassxc-ssh-agent
+
 python3 -m venv .venv
 source .venv/bin/activate
+
+# Install local keepassxc-browser-api dependency first
+pip install ../mietzen-keepassxc-browser-api/
 
 # Install with dev dependencies
 pip install -e ".[dev]"
