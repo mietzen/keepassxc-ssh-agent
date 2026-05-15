@@ -60,6 +60,12 @@ ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent
 - Config files use 0600 permissions (owner-only)
 - Tests use `short_tmp` fixture for Unix socket paths (macOS `tmp_path` is too long for AF_UNIX)
 - LaunchAgent label: `org.keepassxc.ssh-agent`
+- Error/warning messages use `logger.error()` / `logger.warning()` (module-level logger in `__main__.py`) — not `print()`
+- Non-verbose logging: `WARNING` level, `"%(levelname)s: %(message)s"` format to stderr. Verbose (`-v`): `DEBUG` level with timestamp.
+- Exit codes from `__main__.py` subcommands:
+  - `install`: exits `2` on `ConnectionError` (KeePassXC not running), `1` on other errors
+  - `status`: exits `1` when KeePassXC is NOT AVAILABLE or key exchange fails (prints status table first)
+  - `run`: exits `1` on `RuntimeError` from the proxy or missing association/agent path
 
 ## Known Limitations
 
