@@ -1,5 +1,7 @@
 """Tests for the SSH agent proxy server."""
 
+from __future__ import annotations
+
 import os
 import socket
 import struct

@@ -57,9 +57,12 @@ class Config:
         path = path or DEFAULT_CONFIG_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(str(path.parent), stat.S_IRWXU)
-        with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2)
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        data = json.dumps(self.to_dict(), indent=2)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, data.encode())
+        finally:
+            os.close(fd)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:

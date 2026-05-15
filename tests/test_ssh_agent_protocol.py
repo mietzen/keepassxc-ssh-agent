@@ -1,5 +1,7 @@
 """Tests for SSH agent protocol wire format parsing."""
 
+from __future__ import annotations
+
 import socket
 import struct
 import threading
