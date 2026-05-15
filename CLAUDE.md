@@ -41,13 +41,15 @@ Standalone Python tool — an SSH IdentityAgent proxy for macOS that triggers Ke
 
 ```shell
 # Install with dev dependencies
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Run tests
-pytest
+pytest --tb=short -q
 
 # Run tests with coverage
-pytest --cov=keepassxc_ssh_agent
+pytest --cov=keepassxc_ssh_agent --cov-report=term-missing
 
 # Lint
 ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent

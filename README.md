@@ -231,12 +231,18 @@ pipx uninstall keepassxc-ssh-agent
 This package depends on [`keepassxc-browser-api`](https://github.com/mietzen/keepassxc-browser-api), which handles the KeePassXC browser extension protocol. The browser API credentials are stored in `~/.keepassxc/browser-api.json` and are shared with `keepassxc-cli` if installed.
 
 ```shell
+python3 -m venv .venv
+source .venv/bin/activate
+
 # Install with dev dependencies
 pip install -e ".[dev]"
 
 # Run tests
-pytest
+pytest --tb=short -q
 
 # Run tests with coverage
-pytest --cov=keepassxc_ssh_agent
+pytest --cov=keepassxc_ssh_agent --cov-report=term-missing
+
+# Lint
+ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent
 ```
