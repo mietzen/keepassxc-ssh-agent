@@ -191,28 +191,46 @@ def _create_systemd_service(agent_bin: str, ssh_auth_sock: str | None = None) ->
     """Write and start the systemd user unit. Returns True on success."""
     unit_path = _systemd_unit_path()
 
-    if unit_path.exists():
-        print(f"  {unit_path} already exists, skipping.")
-        return True
-
+    # Always (re)write the unit so a repeat install picks up the current binary
+    # path / SSH_AUTH_SOCK, then enable and restart so the latest is running.
+    existed = unit_path.exists()
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     unit_path.write_text(_get_systemd_unit(agent_bin, ssh_auth_sock))
-    print(f"  Created {unit_path}")
+    print(f"  {'Updated' if existed else 'Created'} {unit_path}")
 
     try:
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True)
         subprocess.run(
-            ["systemctl", "--user", "enable", "--now", SYSTEMD_UNIT_NAME],
+            ["systemctl", "--user", "enable", SYSTEMD_UNIT_NAME],
+            check=True,
+            capture_output=True,
+        )
+        # restart (not just start) so a re-install reloads the new unit/binary
+        subprocess.run(
+            ["systemctl", "--user", "restart", SYSTEMD_UNIT_NAME],
             check=True,
             capture_output=True,
         )
         print(f"  Enabled and started {SYSTEMD_UNIT_NAME}")
+        _print_systemd_help()
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         detail = e.stderr.decode().strip() if isinstance(e, subprocess.CalledProcessError) else str(e)
         print(f"  Warning: Failed to start: {detail}")
         print(f"  You can start it manually: systemctl --user enable --now {SYSTEMD_UNIT_NAME}")
         return False
+
+
+def _print_systemd_help() -> None:
+    """Print the systemctl/journalctl commands to manage the service."""
+    name = "keepassxc-ssh-agent"
+    print()
+    print("  Manage the service with:")
+    print(f"    systemctl --user status {name}      # check status")
+    print(f"    systemctl --user stop {name}        # stop")
+    print(f"    systemctl --user start {name}       # start")
+    print(f"    systemctl --user restart {name}     # restart")
+    print(f"    journalctl --user -u {name} -f      # follow logs")
 
 
 def _remove_systemd_service() -> bool:

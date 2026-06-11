@@ -202,24 +202,30 @@ class TestCreateSystemdService:
         unit_path = tmp_path / "systemd" / "user" / SYSTEMD_UNIT_NAME
         assert unit_path.exists()
         assert "SSH_AUTH_SOCK" in unit_path.read_text()
-        # daemon-reload + enable --now
+        # daemon-reload + enable + restart
         calls = [c.args[0] for c in mock_run.call_args_list]
         assert ["systemctl", "--user", "daemon-reload"] in calls
-        assert ["systemctl", "--user", "enable", "--now", SYSTEMD_UNIT_NAME] in calls
+        assert ["systemctl", "--user", "enable", SYSTEMD_UNIT_NAME] in calls
+        assert ["systemctl", "--user", "restart", SYSTEMD_UNIT_NAME] in calls
 
-    def test_skips_if_exists(self, tmp_path, monkeypatch, capsys):
+    def test_overwrites_existing_and_restarts(self, tmp_path, monkeypatch, capsys):
+        """A repeat install rewrites the unit and (re)starts the service."""
         unit_dir = tmp_path / "systemd" / "user"
         unit_dir.mkdir(parents=True)
         unit_path = unit_dir / SYSTEMD_UNIT_NAME
-        unit_path.write_text("existing")
+        unit_path.write_text("stale")
 
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
 
-        result = _create_systemd_service("/bin/agent")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = _create_systemd_service("/bin/agent")
 
         assert result is True
-        assert "already exists" in capsys.readouterr().out
-        assert unit_path.read_text() == "existing"
+        assert unit_path.read_text() != "stale"  # rewritten
+        assert "Updated" in capsys.readouterr().out
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        assert ["systemctl", "--user", "restart", SYSTEMD_UNIT_NAME] in calls
 
     def test_handles_systemctl_failure(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
