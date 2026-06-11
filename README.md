@@ -65,8 +65,9 @@ SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
    - Proxy connects to KeePassXC via the browser extension protocol
    - Sends `get-databasehash` with `triggerUnlock` to show the unlock dialog
    - Polls until the database is unlocked or timeout expires
-   - KeePassXC pushes SSH keys to `ssh-agent` on unlock
-   - Proxy retries the original request and returns the result
+   - KeePassXC pushes SSH keys to `ssh-agent` on unlock (asynchronously)
+   - Proxy then polls `ssh-agent` until the key appears (rather than retrying
+     once), so the very first request succeeds, and returns the result
 
 ### SSH_AUTH_SOCK Interception
 

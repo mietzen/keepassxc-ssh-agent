@@ -166,6 +166,8 @@ class TestSSHAgentProxy:
 class TestUnlockRateLimit:
     def test_rate_limiting(self, monkeypatch):
         """Test that unlock attempts are rate-limited."""
+        from keepassxc_browser_api.exceptions import DatabaseLockedError
+
         monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/test-agent.sock")
 
         config = Config(
@@ -175,13 +177,13 @@ class TestUnlockRateLimit:
         proxy = SSHAgentProxy(config, browser_config)
         proxy._unlock_cooldown = 1.0
 
-        # Mock BrowserClient.ensure_unlocked to return False (no KeePassXC)
+        # ensure_unlocked() raises on failure (lib >= 1.5)
         with patch("keepassxc_ssh_agent.server.BrowserClient") as MockBC:
             mock_client = MagicMock()
-            mock_client.ensure_unlocked.return_value = False
+            mock_client.ensure_unlocked.side_effect = DatabaseLockedError("timeout")
             MockBC.return_value = mock_client
 
-            # First attempt should proceed
+            # First attempt should proceed (exception caught -> False)
             result1 = proxy._try_unlock()
             assert result1 is False
             assert mock_client.ensure_unlocked.call_count == 1
@@ -190,3 +192,83 @@ class TestUnlockRateLimit:
             result2 = proxy._try_unlock()
             assert result2 is False
             assert mock_client.ensure_unlocked.call_count == 1  # Not called again
+
+    def test_success_returns_true(self, monkeypatch):
+        """ensure_unlocked() returning None (no exception) means success."""
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/test-agent.sock")
+
+        config = Config(socket_path="/tmp/test-proxy.sock")
+        proxy = SSHAgentProxy(config, _make_browser_config())
+
+        with patch("keepassxc_ssh_agent.server.BrowserClient") as MockBC:
+            mock_client = MagicMock()
+            mock_client.ensure_unlocked.return_value = None
+            MockBC.return_value = mock_client
+
+            result = proxy._try_unlock()
+            assert result is True
+            assert mock_client.ensure_unlocked.call_count == 1
+
+
+def _identities_response(count: int = 1) -> bytes:
+    return (
+        bytes([proto.SSH_AGENT_IDENTITIES_ANSWER])
+        + struct.pack(">I", count)
+        + struct.pack(">I", 4) + b"key1"
+        + struct.pack(">I", 5) + b"test1"
+    )
+
+
+def _make_proxy() -> SSHAgentProxy:
+    config = Config(socket_path="/tmp/test-proxy.sock")
+    proxy = SSHAgentProxy(config, _make_browser_config(), system_agent_path="/tmp/agent.sock")
+    proxy._key_poll_interval = 0.0  # don't actually sleep in tests
+    return proxy
+
+
+class TestPollAfterUnlock:
+    def test_waits_for_identities_to_appear(self):
+        """Polls until the agent returns a non-empty identity list."""
+        proxy = _make_proxy()
+        empty = proto.make_empty_identities_response()
+        loaded = _identities_response()
+
+        request = bytes([proto.SSH_AGENTC_REQUEST_IDENTITIES])
+        with patch("keepassxc_ssh_agent.server.proto.forward_to_agent",
+                   side_effect=[empty, empty, loaded]) as mock_fwd, \
+                patch("keepassxc_ssh_agent.server.time.sleep"):
+            result = proxy._poll_after_unlock(request, proto.SSH_AGENTC_REQUEST_IDENTITIES)
+
+        assert result == loaded
+        assert mock_fwd.call_count == 3
+
+    def test_returns_last_response_on_deadline(self):
+        """If the key never loads, return the last (empty) response and stop."""
+        proxy = _make_proxy()
+        empty = proto.make_empty_identities_response()
+
+        request = bytes([proto.SSH_AGENTC_REQUEST_IDENTITIES])
+        # monotonic: start at 0, then jump past the 5s deadline on the 2nd check
+        with patch("keepassxc_ssh_agent.server.proto.forward_to_agent",
+                   return_value=empty) as mock_fwd, \
+                patch("keepassxc_ssh_agent.server.time.sleep"), \
+                patch("keepassxc_ssh_agent.server.time.monotonic", side_effect=[0.0, 0.0, 99.0]):
+            result = proxy._poll_after_unlock(request, proto.SSH_AGENTC_REQUEST_IDENTITIES)
+
+        assert result == empty
+        assert mock_fwd.call_count == 2
+
+    def test_waits_for_successful_signature(self):
+        """For a SIGN_REQUEST, polls until the agent stops returning failure."""
+        proxy = _make_proxy()
+        failure = proto.make_failure_response()
+        sign_ok = bytes([proto.SSH_AGENT_SIGN_RESPONSE]) + struct.pack(">I", 3) + b"sig"
+
+        request = bytes([proto.SSH_AGENTC_SIGN_REQUEST])
+        with patch("keepassxc_ssh_agent.server.proto.forward_to_agent",
+                   side_effect=[failure, sign_ok]) as mock_fwd, \
+                patch("keepassxc_ssh_agent.server.time.sleep"):
+            result = proxy._poll_after_unlock(request, proto.SSH_AGENTC_SIGN_REQUEST)
+
+        assert result == sign_ok
+        assert mock_fwd.call_count == 2
