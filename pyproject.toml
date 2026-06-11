@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "keepassxc-ssh-agent"
 dynamic = ["version"]
-description = "SSH IdentityAgent proxy that triggers KeePassXC database unlock via TouchID"
+description = "SSH IdentityAgent proxy that triggers KeePassXC database unlock (TouchID on macOS, biometric/password on Linux)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
