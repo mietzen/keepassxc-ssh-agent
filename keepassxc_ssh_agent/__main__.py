@@ -8,10 +8,10 @@ import shutil
 import sys
 from pathlib import Path
 
-from keepassxc_browser_api import BrowserClient, BrowserConfig
+from keepassxc_browser_api import BrowserClient, BrowserConfig, KeePassXCError
 from keepassxc_browser_api.exceptions import ConnectionError
 
-from .config import Config, DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH
+from .config import DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH, Config
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,7 @@ def _cmd_install(config: Config, config_path: Path, browser_config: BrowserConfi
     except ConnectionError as e:
         logger.error("Install failed: %s", e)
         sys.exit(2)
-    except Exception as e:
+    except KeePassXCError as e:
         logger.error("Install failed: %s", e)
         sys.exit(1)
 
@@ -339,14 +339,14 @@ def _cmd_status(config: Config, browser_config: BrowserConfig) -> None:
 
     try:
         client.change_public_keys()
-    except Exception:
+    except KeePassXCError:
         print("CONNECTED but key exchange failed")
         client.disconnect()
         sys.exit(1)
 
     # Test any stored association
     found = False
-    for _hash, assoc in browser_config.associations.items():
+    for assoc in browser_config.associations.values():
         if client.test_associate(assoc):
             print(f"CONNECTED (association: {assoc.id})")
             found = True
