@@ -209,6 +209,41 @@ class TestUnlockRateLimit:
             assert result is True
             assert mock_client.ensure_unlocked.call_count == 1
 
+    def test_instant_unlock_marks_already_unlocked(self, monkeypatch):
+        """A fast ensure_unlocked() means the DB was already unlocked."""
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/test-agent.sock")
+
+        config = Config(socket_path="/tmp/test-proxy.sock")
+        proxy = SSHAgentProxy(config, _make_browser_config())
+
+        with patch("keepassxc_ssh_agent.server.BrowserClient") as MockBC:
+            mock_client = MagicMock()
+            mock_client.ensure_unlocked.return_value = None
+            MockBC.return_value = mock_client
+
+            result = proxy._try_unlock()
+            assert result is True
+            assert proxy._last_unlock_was_instant is True
+
+    def test_slow_unlock_not_instant(self, monkeypatch):
+        """A real unlock (>= threshold) must NOT be marked already-unlocked."""
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/test-agent.sock")
+
+        config = Config(socket_path="/tmp/test-proxy.sock")
+        proxy = SSHAgentProxy(config, _make_browser_config())
+        proxy._already_unlocked_threshold = 1.0
+
+        # monotonic: now, t0 at start of ensure_unlocked, then jump past threshold
+        with patch("keepassxc_ssh_agent.server.BrowserClient") as MockBC, \
+                patch("keepassxc_ssh_agent.server.time.monotonic", side_effect=[100.0, 100.0, 102.0]):
+            mock_client = MagicMock()
+            mock_client.ensure_unlocked.return_value = None
+            MockBC.return_value = mock_client
+
+            result = proxy._try_unlock()
+            assert result is True
+            assert proxy._last_unlock_was_instant is False
+
 
 def _identities_response(count: int = 1) -> bytes:
     return (
@@ -257,6 +292,23 @@ class TestPollAfterUnlock:
 
         assert result == empty
         assert mock_fwd.call_count == 2
+
+    def test_already_unlocked_does_single_retry(self):
+        """When the DB was already unlocked, forward exactly once, no polling."""
+        proxy = _make_proxy()
+        loaded = _identities_response()
+
+        request = bytes([proto.SSH_AGENTC_REQUEST_IDENTITIES])
+        with patch("keepassxc_ssh_agent.server.proto.forward_to_agent",
+                   return_value=loaded) as mock_fwd, \
+                patch("keepassxc_ssh_agent.server.time.sleep") as mock_sleep:
+            result = proxy._poll_after_unlock(
+                request, proto.SSH_AGENTC_REQUEST_IDENTITIES, already_unlocked=True
+            )
+
+        assert result == loaded
+        assert mock_fwd.call_count == 1
+        mock_sleep.assert_not_called()
 
     def test_waits_for_successful_signature(self):
         """For a SIGN_REQUEST, polls until the agent stops returning failure."""

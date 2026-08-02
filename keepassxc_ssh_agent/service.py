@@ -12,6 +12,7 @@ knows about launchd vs systemd.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -48,17 +49,31 @@ def _agent_argv(agent_bin: str) -> list[str]:
 
 
 def install_service(agent_bin: str, *, ssh_auth_sock: str | None = None) -> bool:
-    """Install and start the auto-start service. Returns True on success."""
+    """Install and start the auto-start service. Returns True on success.
+
+    Only macOS and Linux are supported. On any other platform, nothing is
+    written and the function returns False with a warning.
+    """
     if sys.platform == "darwin":
         return _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
-    return _create_systemd_service(agent_bin, ssh_auth_sock)
+    if sys.platform.startswith("linux"):
+        return _create_systemd_service(agent_bin, ssh_auth_sock)
+    print(f"  Warning: auto-start service not supported on {sys.platform}")
+    return False
 
 
 def remove_service() -> bool:
-    """Stop and remove the auto-start service. Returns True if removed."""
+    """Stop and remove the auto-start service. Returns True if removed.
+
+    Only macOS and Linux are supported. On any other platform, nothing is
+    changed and the function returns False with a warning.
+    """
     if sys.platform == "darwin":
         return _remove_launchagent(LAUNCHAGENT_RUN_LABEL)
-    return _remove_systemd_service()
+    if sys.platform.startswith("linux"):
+        return _remove_systemd_service()
+    print(f"  Warning: auto-start service not supported on {sys.platform}")
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -170,7 +185,9 @@ def _get_systemd_unit(agent_bin: str, ssh_auth_sock: str | None = None) -> str:
     runs with a clean environment and would otherwise not see the login shell's
     SSH_AUTH_SOCK, which the proxy needs to intercept the system agent socket.
     """
-    exec_start = " ".join(_agent_argv(agent_bin))
+    # shlex.join() escapes each arg so paths with spaces survive systemd's
+    # ExecStart word-splitting.
+    exec_start = shlex.join(_agent_argv(agent_bin))
     env_line = f"Environment=SSH_AUTH_SOCK={ssh_auth_sock}\n" if ssh_auth_sock else ""
     return f"""\
 [Unit]

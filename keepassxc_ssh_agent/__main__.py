@@ -180,11 +180,22 @@ def _cmd_install(config: Config, config_path: Path, browser_config: BrowserConfi
         # Auto-start agent on login
         print()
         if yes or _ask_yes_no("Set up keepassxc-ssh-agent to start on login?"):
-            agent_bin = service._find_agent_bin()
-            service.install_service(agent_bin, ssh_auth_sock=os.environ.get("SSH_AUTH_SOCK"))
-            print()
-            print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
-            print("  so all SSH clients use the proxy transparently.")
+            ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
+            if sys.platform.startswith("linux") and not ssh_auth_sock:
+                # A systemd --user service starts with a clean environment, so
+                # SSH_AUTH_SOCK must be baked into the unit; without it the
+                # proxy cannot intercept the system agent socket.
+                logger.error(
+                    "Cannot set up the systemd auto-start service: SSH_AUTH_SOCK is not set. "
+                    "Start ssh-agent first, e.g.: eval $(ssh-agent), then re-run install."
+                )
+            elif service.install_service(service._find_agent_bin(), ssh_auth_sock=ssh_auth_sock):
+                print()
+                print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
+                print("  so all SSH clients use the proxy transparently.")
+            else:
+                print()
+                print("  Auto-start service setup failed; you can still run: keepassxc-ssh-agent run")
         else:
             print()
             print("  To start manually: keepassxc-ssh-agent run")

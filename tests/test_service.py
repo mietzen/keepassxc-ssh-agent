@@ -177,6 +177,11 @@ class TestSystemdUnitGeneration:
         assert "ExecStart=/usr/local/bin/keepassxc-ssh-agent run" in unit
         assert "WantedBy=default.target" in unit
 
+    def test_unit_escapes_spaces_in_path(self):
+        """Paths with spaces survive systemd ExecStart word-splitting."""
+        unit = _get_systemd_unit("/opt/my tools/keepassxc-ssh-agent")
+        assert "ExecStart='/opt/my tools/keepassxc-ssh-agent' run" in unit
+
     def test_unit_with_python_fallback(self):
         unit = _get_systemd_unit(sys.executable)
         assert f"ExecStart={sys.executable} -m keepassxc_ssh_agent run" in unit
@@ -320,3 +325,24 @@ class TestInstallServiceDispatch:
                 patch("keepassxc_ssh_agent.service._remove_systemd_service", return_value=True) as linux:
             assert service.remove_service() is True
             linux.assert_called_once()
+
+    def test_unsupported_platform_returns_false(self, capsys):
+        """On non-macOS/Linux, install_service writes nothing and returns False."""
+        with patch.object(service.sys, "platform", "win32"), \
+                patch("keepassxc_ssh_agent.service._create_launchagent") as mac, \
+                patch("keepassxc_ssh_agent.service._create_systemd_service") as linux:
+            result = service.install_service("/bin/agent")
+        assert result is False
+        mac.assert_not_called()
+        linux.assert_not_called()
+        assert "not supported on win32" in capsys.readouterr().out
+
+    def test_remove_unsupported_platform_returns_false(self, capsys):
+        with patch.object(service.sys, "platform", "win32"), \
+                patch("keepassxc_ssh_agent.service._remove_launchagent") as mac, \
+                patch("keepassxc_ssh_agent.service._remove_systemd_service") as linux:
+            result = service.remove_service()
+        assert result is False
+        mac.assert_not_called()
+        linux.assert_not_called()
+        assert "not supported on win32" in capsys.readouterr().out
