@@ -18,9 +18,10 @@ import time
 import types
 from pathlib import Path
 
+from keepassxc_browser_api import BrowserClient, BrowserConfig
+
 from . import ssh_agent_protocol as proto
 from .config import Config
-from keepassxc_browser_api import BrowserClient, BrowserConfig
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ class SSHAgentProxy:
                         daemon=True,
                     )
                     t.start()
-                except socket.timeout:
+                except TimeoutError:
                     continue
         finally:
             self.stop()
@@ -165,12 +166,11 @@ class SSHAgentProxy:
             should_unlock = True
             logger.debug("Sign request failed, may need unlock")
 
-        if should_unlock:
-            if self._try_unlock():
-                # Retry the request after unlock
-                retry_response = proto.forward_to_agent(self._system_agent_path, request)
-                if retry_response is not None:
-                    return retry_response
+        if should_unlock and self._try_unlock():
+            # Retry the request after unlock
+            retry_response = proto.forward_to_agent(self._system_agent_path, request)
+            if retry_response is not None:
+                return retry_response
 
         return response
 

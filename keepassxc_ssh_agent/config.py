@@ -9,7 +9,6 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_CONFIG_DIR = Path.home() / ".keepassxc"
 DEFAULT_SOCKET_PATH = DEFAULT_CONFIG_DIR / "agent.sock"
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "ssh-agent.json"
