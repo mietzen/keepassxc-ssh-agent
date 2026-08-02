@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Standalone Python tool — an SSH IdentityAgent proxy for macOS that triggers KeePassXC database unlock (via TouchID) when SSH keys are needed.
+Standalone Python tool — a cross-platform (macOS and Linux) SSH IdentityAgent proxy that triggers KeePassXC database unlock (via TouchID/Quick Unlock on macOS, biometric/password on Linux) when SSH keys are needed.
 
 ## Architecture
 
@@ -17,6 +17,7 @@ Standalone Python tool — an SSH IdentityAgent proxy for macOS that triggers Ke
 - `keepassxc_ssh_agent/ssh_agent_protocol.py` — SSH agent wire format (4-byte length prefix + message)
 - `keepassxc_ssh_agent/config.py` — Agent-only config persistence (`~/.keepassxc/ssh-agent.json`); fields: `socket_path`, `system_agent_path`, `browser_api_config_path`
 - `keepassxc_ssh_agent/__main__.py` — CLI: `install`, `run`, `status`, `uninstall`
+- `keepassxc_ssh_agent/service.py` — auto-start service abstraction; dispatches on `sys.platform`: launchd LaunchAgent on macOS, systemd user unit (`~/.config/systemd/user/keepassxc-ssh-agent.service`) on Linux. Public API: `install_service(agent_bin, *, ssh_auth_sock=None)`, `remove_service()`. On Linux the captured `SSH_AUTH_SOCK` is baked into the unit via `Environment=` (systemd `--user` services have a clean env).
 
 ### Config Files
 
@@ -60,8 +61,8 @@ ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent
 - Python >= 3.10, no async (threading-based for simplicity)
 - `from __future__ import annotations` in all source files
 - Config files use 0600 permissions (owner-only)
-- Tests use `short_tmp` fixture for Unix socket paths (macOS `tmp_path` is too long for AF_UNIX)
-- LaunchAgent label: `org.keepassxc.ssh-agent`
+- Tests use `short_tmp` fixture for Unix socket paths (default `tmp_path` can exceed the AF_UNIX path limit)
+- Auto-start service identifiers: macOS LaunchAgent label / Linux systemd unit name `org.keepassxc.ssh-agent` / `keepassxc-ssh-agent.service` (in `service.py`)
 - Error/warning messages use `logger.error()` / `logger.warning()` (module-level logger in `__main__.py`) — not `print()`
 - Non-verbose logging: `WARNING` level, `"%(levelname)s: %(message)s"` format to stderr. Verbose (`-v`): `DEBUG` level with timestamp.
 - Exit codes from `__main__.py` subcommands:
@@ -71,7 +72,8 @@ ruff check --ignore=E501 --exclude=__init__.py ./keepassxc_ssh_agent
 
 ## Known Limitations
 
-- macOS only (browser extension socket path is platform-specific)
+- macOS and Linux only (relies on the platform-specific browser extension socket path resolved by `keepassxc-browser-api`)
+- Linux auto-start uses a systemd `--user` service, which requires an active user session (use `loginctl enable-linger` for headless setups)
 - If DB is unlocked but ssh-agent is cleared (`ssh-add -D`), keys won't reload without lock/unlock cycle
 - `triggerUnlock` only works for the active database tab in KeePassXC
 

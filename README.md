@@ -1,6 +1,6 @@
 # KeePassXC SSH Agent
 
-`keepassxc-ssh-agent` is an SSH `IdentityAgent` proxy for macOS that automatically triggers KeePassXC database unlock (via TouchID / Quick Unlock) when an SSH key is needed.
+`keepassxc-ssh-agent` is a cross-platform (macOS and Linux) SSH `IdentityAgent` proxy that automatically triggers KeePassXC database unlock (via TouchID / Quick Unlock on macOS, biometric / password unlock on Linux) when an SSH key is needed.
 
 Similar to how [Strongbox](https://strongboxsafe.com/) handles SSH keys, this tool sits between your SSH client and the system `ssh-agent`. When SSH requests a key that isn't loaded (because the KeePassXC database is locked), the proxy triggers KeePassXC's unlock dialog. After you authenticate with TouchID, KeePassXC pushes the keys to `ssh-agent`, and the SSH operation continues seamlessly.
 
@@ -10,7 +10,7 @@ KeePassXC SSH Agent based on [KeePassXC Browser API](https://github.com/mietzen/
 
 ## Prerequisites
 
-- **macOS** (uses Unix sockets and KeePassXC's browser extension socket)
+- **macOS or Linux** (uses Unix sockets and KeePassXC's browser extension socket; on Linux the socket path is resolved from `XDG_RUNTIME_DIR`, supporting native and Flatpak installs)
 - **Python >= 3.10**
 - **KeePassXC** with:
   - Browser Integration enabled (Settings > Browser Integration > Enable browser integration)
@@ -31,10 +31,10 @@ SSH IdentityAgent proxy that triggers KeePassXC database unlock via TouchID
 
 positional arguments:
   {install,run,status,uninstall}
-    install             Associate with KeePassXC and install LaunchAgent
+    install             Associate with KeePassXC and set up the auto-start service
     run                 Start the SSH agent proxy (default command)
     status              Check connection status with KeePassXC
-    uninstall           Remove LaunchAgent and restore SSH_AUTH_SOCK
+    uninstall           Remove the auto-start service and restore SSH_AUTH_SOCK
 
 options:
   -h, --help          show this help message and exit
@@ -65,20 +65,23 @@ SSH Client ──► SSH agent protocol ──► keepassxc-ssh-agent (proxy)
    - Proxy connects to KeePassXC via the browser extension protocol
    - Sends `get-databasehash` with `triggerUnlock` to show the unlock dialog
    - Polls until the database is unlocked or timeout expires
-   - KeePassXC pushes SSH keys to `ssh-agent` on unlock
-   - Proxy retries the original request and returns the result
+   - KeePassXC pushes SSH keys to `ssh-agent` on unlock (asynchronously)
+   - Proxy then polls `ssh-agent` until the key appears (rather than retrying
+     once), so the very first request succeeds, and returns the result
 
 ### SSH_AUTH_SOCK Interception
 
-The proxy automatically intercepts `SSH_AUTH_SOCK` on startup by renaming the system ssh-agent socket (e.g. `/tmp/com.apple.launchd.XXX/Listeners`) to a `.system` backup and placing a symlink from the original path to the proxy socket. All SSH clients then connect to the proxy transparently. The proxy forwards requests to the renamed `.system` socket.
+The proxy automatically intercepts `SSH_AUTH_SOCK` on startup by renaming the system ssh-agent socket (e.g. `/tmp/com.apple.launchd.XXX/Listeners` on macOS, `/run/user/UID/ssh-agent.socket` on Linux) to a `.system` backup and placing a symlink from the original path to the proxy socket. All SSH clients then connect to the proxy transparently. The proxy forwards requests to the renamed `.system` socket.
 
-On shutdown, the proxy restores the original socket. No separate LaunchAgent or SSH config is needed — the `run` command handles everything.
+On shutdown, the proxy restores the original socket. No separate service or SSH config is needed — the `run` command handles everything.
+
+> **Note (Linux/systemd):** a systemd `--user` service starts with a clean environment and does not inherit your shell's `SSH_AUTH_SOCK`. `install` therefore captures the current `SSH_AUTH_SOCK` and bakes it into the generated unit (`Environment=SSH_AUTH_SOCK=...`) so interception works without any shell-profile changes.
 
 ## Install
 
 Make sure KeePassXC is running and unlocked with browser integration enabled, then:
 
-### Homebrew (recommended)
+### Homebrew (macOS, recommended)
 
 See **[homebrew homepage](https://brew.sh/)** on how to setup homebrew.
 
@@ -93,7 +96,7 @@ This will:
 - Register with KeePassXC (you'll need to approve the association in the unlocked KeePassXC window)
 - Start the background service via Homebrew (auto-starts on login)
 
-### pipx - Automatic Install
+### pipx - Automatic Install (macOS and Linux)
 
 See **[pipx installation guide](https://github.com/pypa/pipx#install-pipx)** on how to setup pipx.
 
@@ -107,9 +110,19 @@ This will:
 - Request association with KeePassXC (you'll need to approve it in the KeePassXC window)
 - Save the agent configuration to `~/.keepassxc/ssh-agent.json`
 - Save the browser API credentials to `~/.keepassxc/browser-api.json` (shared with `keepassxc-cli` if installed)
-- Create a LaunchAgent for auto-start on login
+- Set up an auto-start service for login: a **LaunchAgent** on macOS, or a **systemd user service** (`~/.config/systemd/user/keepassxc-ssh-agent.service`) on Linux
 
-The `-y` flag auto-accepts all prompts. Without it, you'll be asked interactively whether to create the LaunchAgent.
+The `-y` flag auto-accepts all prompts. Without it, you'll be asked interactively whether to set up the auto-start service.
+
+On Linux, manage the service with `systemctl --user`:
+
+```shell
+systemctl --user status keepassxc-ssh-agent     # check status
+systemctl --user restart keepassxc-ssh-agent    # restart
+journalctl --user -u keepassxc-ssh-agent        # view logs
+```
+
+> systemd `--user` services require an active user session. On headless machines (no graphical login), enable lingering so the service starts at boot: `loginctl enable-linger $USER`.
 
 ### pipx - Manual Install
 
@@ -123,7 +136,7 @@ pipx install keepassxc-ssh-agent
 
 #### 2. Register with KeePassXC
 
-Register with KeePassXC without creating a LaunchAgent:
+Register with KeePassXC without setting up the auto-start service:
 
 ```shell
 keepassxc-ssh-agent install --register-only
@@ -131,9 +144,9 @@ keepassxc-ssh-agent install --register-only
 
 You'll need to approve the association in the KeePassXC window when prompted.
 
-#### 3. Create a LaunchAgent (optional)
+#### 3. Set up auto-start (optional)
 
-To auto-start the agent on login, create a LaunchAgent plist:
+**macOS** — create a LaunchAgent plist:
 
 ```shell
 cat << 'EOF' > ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
@@ -164,7 +177,31 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.keepassxc.ssh-agent.
 
 Replace `/path/to/keepassxc-ssh-agent` with the actual path (find it with `which keepassxc-ssh-agent`).
 
-Or start manually without a LaunchAgent:
+**Linux** — create a systemd user unit:
+
+```shell
+mkdir -p ~/.config/systemd/user
+cat << EOF > ~/.config/systemd/user/keepassxc-ssh-agent.service
+[Unit]
+Description=KeePassXC SSH Agent proxy
+After=ssh-agent.service
+
+[Service]
+Type=simple
+ExecStart=$(which keepassxc-ssh-agent) run
+Environment=SSH_AUTH_SOCK=${SSH_AUTH_SOCK}
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now keepassxc-ssh-agent.service
+```
+
+The `Environment=SSH_AUTH_SOCK=...` line captures your current agent socket so the proxy can intercept it (the service otherwise runs with a clean environment).
+
+Or start manually without an auto-start service:
 
 ```shell
 keepassxc-ssh-agent run
@@ -172,7 +209,7 @@ keepassxc-ssh-agent run
 
 ## Uninstall
 
-### Homebrew
+### Homebrew (macOS)
 
 ```shell
 brew services stop keepassxc-ssh-agent
@@ -187,15 +224,25 @@ keepassxc-ssh-agent uninstall -y
 pipx uninstall keepassxc-ssh-agent
 ```
 
-This stops and removes the LaunchAgent, restores the original SSH_AUTH_SOCK socket, and removes the config directory (`~/.keepassxc/`). Without `-y`, you'll be asked before deleting the config directory.
+This stops and removes the auto-start service (LaunchAgent on macOS, systemd user service on Linux), restores the original SSH_AUTH_SOCK socket, and removes the config directory (`~/.keepassxc/`). Without `-y`, you'll be asked before deleting the config directory.
 
 ### Manual Uninstall
 
-#### 1. Stop and remove the LaunchAgent
+#### 1. Stop and remove the auto-start service
+
+**macOS:**
 
 ```shell
 launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist 2>/dev/null
 rm -f ~/Library/LaunchAgents/org.keepassxc.ssh-agent.plist
+```
+
+**Linux:**
+
+```shell
+systemctl --user disable --now keepassxc-ssh-agent.service 2>/dev/null
+rm -f ~/.config/systemd/user/keepassxc-ssh-agent.service
+systemctl --user daemon-reload
 ```
 
 #### 2. Restore SSH_AUTH_SOCK
@@ -224,7 +271,8 @@ pipx uninstall keepassxc-ssh-agent
 
 ## Known Limitations
 
-- **macOS only**: Uses KeePassXC's browser extension Unix socket at `$TMPDIR/org.keepassxc.KeePassXC.BrowserServer`
+- **macOS and Linux only**: Relies on KeePassXC's browser extension Unix socket, whose path is platform-specific (`$TMPDIR/org.keepassxc.KeePassXC.BrowserServer` on macOS, `$XDG_RUNTIME_DIR/.../org.keepassxc.KeePassXC.BrowserServer` on Linux)
+- **Linux auto-start**: Uses a systemd `--user` service, which requires an active user session (use `loginctl enable-linger` for headless setups)
 - **DB unlocked but agent cleared**: If the database is already unlocked but `ssh-agent` keys were manually removed (`ssh-add -D`), the proxy detects empty keys and triggers "unlock", but KeePassXC reports "already unlocked" without reloading keys. Workaround: lock and re-unlock the database in KeePassXC.
 - **Multiple databases**: `triggerUnlock` only works for the currently active database tab in KeePassXC.
 

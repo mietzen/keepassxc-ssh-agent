@@ -11,6 +11,7 @@ from pathlib import Path
 from keepassxc_browser_api import BrowserClient, BrowserConfig, KeePassXCError
 from keepassxc_browser_api.exceptions import ConnectionError
 
+from . import service
 from .config import DEFAULT_CONFIG_PATH, DEFAULT_SOCKET_PATH, Config
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def main() -> None:
     install_parser = subparsers.add_parser(
         "install",
         parents=[common],
-        help="Associate with KeePassXC and install LaunchAgent",
+        help="Associate with KeePassXC and set up the auto-start service",
     )
     install_parser.add_argument(
         "-y", "--yes",
@@ -64,7 +65,7 @@ def main() -> None:
     install_parser.add_argument(
         "--register-only",
         action="store_true",
-        help="Only register with KeePassXC, skip LaunchAgent creation",
+        help="Only register with KeePassXC, skip auto-start service setup",
     )
 
     subparsers.add_parser(
@@ -82,7 +83,7 @@ def main() -> None:
     uninstall_parser = subparsers.add_parser(
         "uninstall",
         parents=[common],
-        help="Remove LaunchAgent and restore SSH_AUTH_SOCK",
+        help="Remove the auto-start service and restore SSH_AUTH_SOCK",
     )
     uninstall_parser.add_argument(
         "-y", "--yes",
@@ -141,117 +142,6 @@ def _ask_yes_no(prompt: str, default: bool = True) -> bool:
     return answer in ("y", "yes")
 
 
-LAUNCHAGENT_RUN_LABEL = "org.keepassxc.ssh-agent"
-
-
-def _find_agent_bin() -> str:
-    """Find the keepassxc-ssh-agent binary path."""
-    path = shutil.which("keepassxc-ssh-agent")
-    if path:
-        return path
-    return sys.executable
-
-
-def _get_run_plist(agent_bin: str) -> str:
-    """Generate LaunchAgent plist that starts keepassxc-ssh-agent run on login."""
-    import os
-    import stat
-
-    log_dir = Path.home() / ".keepassxc" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(str(log_dir), stat.S_IRWXU)
-
-    args_block = f"    <string>{agent_bin}</string>\n    <string>run</string>"
-    if agent_bin == sys.executable:
-        args_block = (
-            f"    <string>{agent_bin}</string>\n"
-            "    <string>-m</string>\n"
-            "    <string>keepassxc_ssh_agent</string>\n"
-            "    <string>run</string>"
-        )
-    return f"""\
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{LAUNCHAGENT_RUN_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-{args_block}
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>{log_dir / "out.log"}</string>
-  <key>StandardErrorPath</key>
-  <string>{log_dir / "err.log"}</string>
-</dict>
-</plist>
-"""
-
-
-def _create_launchagent(label: str, content: str) -> bool:
-    """Create and load a single LaunchAgent plist. Returns True on success."""
-    import os
-    import subprocess
-    from pathlib import Path
-
-    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-
-    if plist_path.exists():
-        print(f"  {plist_path} already exists, skipping.")
-        return True
-
-    plist_path.parent.mkdir(parents=True, exist_ok=True)
-    plist_path.write_text(content)
-    print(f"  Created {plist_path}")
-
-    uid = os.getuid()
-    try:
-        subprocess.run(
-            ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
-            check=True,
-            capture_output=True,
-        )
-        print(f"  Loaded {label}")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"  Warning: Failed to load: {e.stderr.decode().strip()}")
-        print(f"  You can load it manually: launchctl bootstrap gui/{uid} {plist_path}")
-        return False
-
-
-def _remove_launchagent(label: str) -> bool:
-    """Stop and remove a LaunchAgent plist. Returns True if removed."""
-    import os
-    import subprocess
-    from pathlib import Path
-
-    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
-
-    if not plist_path.exists():
-        print(f"  {plist_path} does not exist, skipping.")
-        return False
-
-    uid = os.getuid()
-    try:
-        subprocess.run(
-            ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
-            check=True,
-            capture_output=True,
-        )
-        print(f"  Stopped {label}")
-    except subprocess.CalledProcessError:
-        pass  # May not be running
-
-    plist_path.unlink()
-    print(f"  Removed {plist_path}")
-    return True
-
-
 def _cmd_install(config: Config, config_path: Path, browser_config: BrowserConfig, *, yes: bool = False, register_only: bool = False) -> None:
     """Run the install/association flow."""
     import os
@@ -289,12 +179,23 @@ def _cmd_install(config: Config, config_path: Path, browser_config: BrowserConfi
     if not register_only:
         # Auto-start agent on login
         print()
-        if yes or _ask_yes_no("Create a LaunchAgent to start keepassxc-ssh-agent on login?"):
-            agent_bin = _find_agent_bin()
-            _create_launchagent(LAUNCHAGENT_RUN_LABEL, _get_run_plist(agent_bin))
-            print()
-            print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
-            print("  so all SSH clients use the proxy transparently.")
+        if yes or _ask_yes_no("Set up keepassxc-ssh-agent to start on login?"):
+            ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
+            if sys.platform.startswith("linux") and not ssh_auth_sock:
+                # A systemd --user service starts with a clean environment, so
+                # SSH_AUTH_SOCK must be baked into the unit; without it the
+                # proxy cannot intercept the system agent socket.
+                logger.error(
+                    "Cannot set up the systemd auto-start service: SSH_AUTH_SOCK is not set. "
+                    "Start ssh-agent first, e.g.: eval $(ssh-agent), then re-run install."
+                )
+            elif service.install_service(service._find_agent_bin(), ssh_auth_sock=ssh_auth_sock):
+                print()
+                print("  The agent will intercept SSH_AUTH_SOCK automatically on startup")
+                print("  so all SSH clients use the proxy transparently.")
+            else:
+                print()
+                print("  Auto-start service setup failed; you can still run: keepassxc-ssh-agent run")
         else:
             print()
             print("  To start manually: keepassxc-ssh-agent run")
@@ -492,9 +393,9 @@ def _cmd_uninstall(config: Config, config_path: Path, *, yes: bool = False) -> N
     print("=" * 40)
     print()
 
-    # Step 1: Stop and remove the LaunchAgent
-    print("LaunchAgent:")
-    _remove_launchagent(LAUNCHAGENT_RUN_LABEL)
+    # Step 1: Stop and remove the auto-start service
+    print("Auto-start service:")
+    service.remove_service()
 
     # Step 2: Restore SSH_AUTH_SOCK
     print()

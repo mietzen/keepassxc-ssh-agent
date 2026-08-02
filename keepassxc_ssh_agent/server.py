@@ -19,6 +19,7 @@ import types
 from pathlib import Path
 
 from keepassxc_browser_api import BrowserClient, BrowserConfig
+from keepassxc_browser_api.exceptions import KeePassXCError
 
 from . import ssh_agent_protocol as proto
 from .config import Config
@@ -40,6 +41,15 @@ class SSHAgentProxy:
         # Track recent unlock to avoid spamming KeePassXC
         self._last_unlock_attempt = 0.0
         self._unlock_cooldown = 3.0  # seconds
+        # After unlock, KeePassXC loads keys into ssh-agent asynchronously.
+        # Poll the agent until the key shows up instead of a single fixed wait.
+        self._key_load_timeout = 5.0  # seconds, overall deadline
+        self._key_poll_interval = 0.2  # seconds between polls
+        # ensure_unlocked() returns <1s only when the DB was already unlocked
+        # (real unlocks take >=1s in the library's poll loop); in that case
+        # keys won't reload, so a long poll is wasted.
+        self._already_unlocked_threshold = 1.0  # seconds
+        self._last_unlock_was_instant = False
 
     def start(self) -> None:
         """Start the proxy server."""
@@ -167,12 +177,52 @@ class SSHAgentProxy:
             logger.debug("Sign request failed, may need unlock")
 
         if should_unlock and self._try_unlock():
-            # Retry the request after unlock
-            retry_response = proto.forward_to_agent(self._system_agent_path, request)
+            # KeePassXC loads keys asynchronously after unlock; poll the
+            # agent until the key appears rather than retrying just once.
+            already_unlocked = self._last_unlock_was_instant
+            retry_response = self._poll_after_unlock(request, msg_type, already_unlocked=already_unlocked)
             if retry_response is not None:
                 return retry_response
 
         return response
+
+    def _poll_after_unlock(
+        self,
+        request: bytes,
+        msg_type: int | None,
+        *,
+        already_unlocked: bool = False,
+    ) -> bytes | None:
+        """Poll the system agent after unlock until the key is available.
+
+        Returns as soon as the agent reports a non-empty identity list (for a
+        REQUEST_IDENTITIES) or a successful signature (for a SIGN_REQUEST), or
+        the last response received once the deadline expires.
+
+        When ``already_unlocked`` is True, the DB was unlocked before the
+        request, so keys will not be reloaded (KeePassXC only pushes keys on a
+        lock/unlock transition); a single retry suffices instead of the full
+        poll.
+        """
+        if already_unlocked:
+            return proto.forward_to_agent(self._system_agent_path, request)
+
+        deadline = time.monotonic() + self._key_load_timeout
+        last_response: bytes | None = None
+
+        while True:
+            response = proto.forward_to_agent(self._system_agent_path, request)
+            if response is not None:
+                last_response = response
+                if msg_type == proto.SSH_AGENTC_REQUEST_IDENTITIES and not proto.is_empty_identities(response):
+                    return response
+                if msg_type == proto.SSH_AGENTC_SIGN_REQUEST and not proto.is_failure_response(response):
+                    return response
+
+            if time.monotonic() >= deadline:
+                return last_response
+
+            time.sleep(self._key_poll_interval)
 
     def _try_unlock(self) -> bool:
         """Attempt to unlock KeePassXC, with rate limiting."""
@@ -187,13 +237,21 @@ class SSHAgentProxy:
 
             logger.info("Triggering KeePassXC database unlock...")
             client = BrowserClient(self.browser_config)
-            result = client.ensure_unlocked()
+            try:
+                # In keepassxc-browser-api >= 1.5, ensure_unlocked() returns None
+                # and signals failure by raising a KeePassXCError subclass.
+                unlock_started = time.monotonic()
+                client.ensure_unlocked()
+            except KeePassXCError as e:
+                logger.warning("Database unlock failed or was cancelled: %s", e)
+                return False
 
-            if result:
-                logger.info("Database unlocked, keys should now be available")
-                # Give KeePassXC a moment to push keys to ssh-agent
-                time.sleep(0.5)
-            else:
-                logger.warning("Database unlock failed or was cancelled")
+            # When the DB was already unlocked, ensure_unlocked() returns in
+            # well under a second; a real unlock takes >= 1s (library poll
+            # loop). Surface that so the caller can skip the long poll.
+            self._last_unlock_was_instant = (
+                time.monotonic() - unlock_started < self._already_unlocked_threshold
+            )
 
-            return result
+            logger.info("Database unlocked, waiting for keys to load into ssh-agent")
+            return True
